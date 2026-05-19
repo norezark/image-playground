@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image Generation Playground</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="toolbar" class="toolbar">
+    <span id="syncStatus" class="sync-status sync-connecting">接続中…</span>
+  </div>
+  <main>
+    <section id="controls">
+      <h2>Create a New Image</h2>
+      <form id="generateForm">
+        <label>
+          Prompt
+          <textarea name="prompt" id="prompt" rows="6" required placeholder="Enter your prompt here..."></textarea>
+        </label>
+        <div id="inputImagesSection">
+          <div id="inputDropZone" class="input-drop-zone">
+            <span id="inputDropHint">入力画像をドロップまたは<label for="inputFileInput" class="file-link">ファイルを選択</label>（最大16枚・編集モードに切り替わります）</span>
+            <input type="file" id="inputFileInput" accept="image/*" multiple style="display:none">
+          </div>
+          <div id="inputThumbnails" class="input-thumbnails"></div>
+        </div>
+        <div class="row">
+          <label>
+            Model
+            <select name="model" id="model">
+              <option value="gpt-image-2-all">gpt-image-2-all</option>
+              <option value="gpt-image-2">gpt-image-2</option>
+              <option value="gpt-image-1.5">gpt-image-1.5</option>
+              <option value="gpt-image-1">gpt-image-1</option>
+              <option value="gpt-image-1-mini">gpt-image-1-mini</option>
+            </select>
+          </label>
+          <label>
+            Number of images
+            <input type="number" name="n" id="n" min="1" max="8" value="1">
+          </label>
+        </div>
+        <div class="row">
+          <div class="vis-group-wrap">
+            向き
+            <div class="size-vis-group" id="sizeOrientationGroup">
+              <button type="button" class="vis-btn" data-value="auto" title="Auto">
+                <span class="vis-shape-wrap"><span class="vis-auto-icon">auto</span></span>
+              </button>
+              <button type="button" class="vis-btn active" data-value="square" title="正方形 (1:1)">
+                <span class="vis-shape-wrap"><span class="vis-shape" style="width:30px;height:30px"></span></span>
+              </button>
+              <button type="button" class="vis-btn" data-value="landscape" title="横">
+                <span class="vis-shape-wrap"><span class="vis-shape" style="width:42px;height:26px"></span></span>
+              </button>
+              <button type="button" class="vis-btn" data-value="portrait" title="縦">
+                <span class="vis-shape-wrap"><span class="vis-shape" style="width:24px;height:38px"></span></span>
+              </button>
+            </div>
+            <input type="hidden" id="sizeOrientation" value="square">
+          </div>
+          <div class="vis-group-wrap" id="sizeRatioLabel" style="display:none">
+            アスペクト比
+            <div class="size-vis-group" id="sizeRatioGroup">
+              <button type="button" class="vis-btn active" data-value="4:3" title="4:3">
+                <span class="vis-shape" data-lw="36" data-lh="27" style="width:36px;height:27px"></span>
+                <span class="vis-btn-label">4:3</span>
+              </button>
+              <button type="button" class="vis-btn" data-value="3:2" title="3:2">
+                <span class="vis-shape" data-lw="36" data-lh="24" style="width:36px;height:24px"></span>
+                <span class="vis-btn-label">3:2</span>
+              </button>
+              <button type="button" class="vis-btn" data-value="16:9" title="16:9">
+                <span class="vis-shape" data-lw="40" data-lh="22" style="width:40px;height:22px"></span>
+                <span class="vis-btn-label">16:9</span>
+              </button>
+              <button type="button" class="vis-btn" data-value="2:1" title="2:1">
+                <span class="vis-shape" data-lw="40" data-lh="20" style="width:40px;height:20px"></span>
+                <span class="vis-btn-label">2:1</span>
+              </button>
+              <button type="button" class="vis-btn" data-value="3:1" title="3:1">
+                <span class="vis-shape" data-lw="42" data-lh="14" style="width:42px;height:14px"></span>
+                <span class="vis-btn-label">3:1</span>
+              </button>
+            </div>
+            <input type="hidden" id="sizeRatio" value="4:3">
+          </div>
+          <label id="sizeTierLabel">
+            大きさ
+            <select id="sizeTier">
+              <option value="S" selected>S</option>
+              <option value="M">M</option>
+              <option value="L">L</option>
+              <option value="XL">XL</option>
+            </select>
+            <span id="sizePreview" style="font-size:0.8em; opacity:0.7; margin-left:0.3em; white-space:nowrap"></span>
+          </label>
+          <label>
+            Quality
+            <select name="quality" id="quality">
+              <option value="">Default</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label>
+            Input fidelity
+            <select name="input_fidelity" id="input_fidelity">
+              <option value="">Default</option>
+              <option value="low">Low</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label>
+            Background
+            <select name="background" id="background">
+              <option value="">Default</option>
+              <option value="opaque">Opaque</option>
+            </select>
+          </label>
+          <label>
+            Format
+            <select name="format" id="format">
+              <option value="">Default (png)</option>
+              <option value="jpeg">JPEG</option>
+              <option value="webp">WebP</option>
+            </select>
+          </label>
+          <label>
+            Compression (0–100)
+            <input type="number" name="output_compression" id="output_compression" min="0" max="100" step="1" placeholder="auto">
+          </label>
+          <label>
+            Moderation
+            <select name="moderation" id="moderation">
+              <option value="">Default (auto)</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+        </div>
+        <p id="priceEstimate" class="price-estimate"></p>
+        <button type="submit">Generate</button>
+      </form>
+    </section>
+    <section id="history">
+      <div class="section-header">
+        <h2>Generation History</h2>
+        <div class="fit-toggle" id="fitToggle" aria-label="Image scaling">
+          <button class="fit-btn" data-fit="cover" title="Cover (crop)">Cover</button>
+          <button class="fit-btn" data-fit="contain" title="Contain (letterbox)">Contain</button>
+        </div>
+      </div>
+      <div id="historyList" data-fit="cover"></div>
+    </section>
+  </main>
+  <!-- Lightbox overlay -->
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="画像を拡大表示">
+    <button id="lightboxFullscreen" class="lightbox-fullscreen" aria-label="全画面表示"></button>
+    <button id="lightboxClose" class="lightbox-close" aria-label="閉じる">&#x2715;</button>
+    <img id="lightboxImg" class="lightbox-img" src="" alt="拡大画像">
+  </div>
+
+  <script type="module" src="script.js"></script>
+</body>
+</html>

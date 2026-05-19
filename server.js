@@ -1,0 +1,356 @@
+﻿const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+// ---- .env ファイルの読み込み（dotenv 不使用） ----
+const envFile = path.join(__dirname, '.env');
+if (fs.existsSync(envFile)) {
+  fs.readFileSync(envFile, 'utf-8').split('\n').forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+    const idx = trimmed.indexOf('=');
+    if (idx === -1) return;
+    const key = trimmed.slice(0, idx).trim();
+    const val = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, '');
+    if (key && !(key in process.env)) process.env[key] = val;
+  });
+}
+
+// ---- 設定 ----
+const PORT        = process.env.PORT || 8000;
+const MAX_RETRIES = Number(process.env.MAX_RETRIES) || 10;
+const API_KEY     = process.env.OPENAI_API_KEY;
+const API_BASE    = 'https://api.cometapi.com/v1/images';
+
+if (!API_KEY) {
+  console.error('エラー: 環境変数 OPENAI_API_KEY が設定されていません。.env ファイルを確認してください。');
+  process.exit(1);
+}
+
+const HISTORY_FILE = path.join(__dirname, 'history.json');
+const PUBLIC_DIR   = path.join(__dirname, 'public');
+const IMAGES_DIR   = path.join(PUBLIC_DIR, 'images');
+const INPUTS_DIR   = path.join(IMAGES_DIR, 'inputs');
+
+const CONTENT_TYPES = {
+  '.html': 'text/html',
+  '.js':   'text/javascript',
+  '.css':  'text/css',
+  '.json': 'application/json',
+  '.png':  'image/png',
+  '.jpg':  'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.svg':  'image/svg+xml',
+};
+
+// ---- 起動時の初期化 ----
+for (const dir of [IMAGES_DIR, INPUTS_DIR]) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+let history = [];
+try {
+  if (fs.existsSync(HISTORY_FILE)) {
+    history = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
+  }
+} catch (err) {
+  console.error('履歴ファイルの読み込みに失敗しました:', err);
+}
+
+// ---- 状態管理 ----
+const clients          = new Set();
+const pendingEntries   = new Map();
+const abortControllers = new Map();
+
+// ---- ユーティリティ ----
+function generateId() {
+  return crypto.randomBytes(12).toString('base64url');
+}
+
+function saveHistory() {
+  try {
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+  } catch (err) {
+    console.error('履歴の保存に失敗しました:', err);
+  }
+}
+
+function broadcast(message) {
+  const data = JSON.stringify(message);
+  for (const client of clients) {
+    client.res.write(`event: update\ndata: ${data}\n\n`);
+  }
+}
+
+function sendInitialState(res) {
+  const data = JSON.stringify({
+    type: 'init',
+    history,
+    pending: Array.from(pendingEntries.values()),
+  });
+  res.write(`event: init\ndata: ${data}\n\n`);
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
+function parseJSON(text) {
+  try { return JSON.parse(text || '{}'); } catch { return null; }
+}
+
+function jsonResponse(res, status, payload) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(payload));
+}
+
+// ---- OpenAI API 呼び出し ----
+async function apiFetch(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    let detail = await res.text();
+    try { detail = JSON.parse(detail).error?.message || detail; } catch {}
+    throw new Error(`API リクエスト失敗: ${res.status} ${res.statusText} - ${detail}`);
+  }
+  return res.json();
+}
+
+async function callGenerations(prompt, params, signal) {
+  const payload = {
+    model:  params.model || 'gpt-image-2',
+    prompt,
+    n:      params.n ? Number(params.n) : 1,
+    size:   params.size || '1024x1024',
+  };
+  if (params.quality)        payload.quality        = params.quality;
+  if (params.input_fidelity) payload.input_fidelity = params.input_fidelity;
+  if (params.background)     payload.background     = params.background;
+  if (params.format)         payload.format         = params.format;
+  if (params.moderation)     payload.moderation     = params.moderation;
+  if (params.style)          payload.style          = params.style;
+  if (params.output_compression !== undefined && params.output_compression !== '') {
+    const v = parseInt(params.output_compression, 10);
+    if (!Number.isNaN(v)) payload.output_compression = v;
+  }
+  return apiFetch(`${API_BASE}/generations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+async function callEdits(prompt, params, inputImageFiles, signal) {
+  const form = new FormData();
+  form.append('model',  params.model || 'gpt-image-1.5');
+  form.append('prompt', prompt);
+  if (params.n)              form.append('n',             String(Number(params.n)));
+  if (params.size)           form.append('size',          params.size);
+  if (params.quality)        form.append('quality',       params.quality);
+  if (params.input_fidelity) form.append('input_fidelity', params.input_fidelity);
+  if (params.background)     form.append('background',    params.background);
+  if (params.format)         form.append('output_format', params.format);
+  if (params.moderation)     form.append('moderation',    params.moderation);
+  if (params.output_compression !== undefined && params.output_compression !== '') {
+    const v = parseInt(params.output_compression, 10);
+    if (!Number.isNaN(v)) form.append('output_compression', String(v));
+  }
+  for (const img of inputImageFiles) {
+    form.append('image[]', new Blob([img.buffer], { type: img.mimeType }), img.filename);
+  }
+  return apiFetch(`${API_BASE}/edits`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${API_KEY}` },
+    body: form,
+    signal,
+  });
+}
+
+// ---- 画像生成（リトライ付き） ----
+function startGeneration(id, entry, prompt, params, inputImageFiles) {
+  let attempt = 0;
+
+  async function tryGenerate() {
+    if (!pendingEntries.has(id)) return;
+    try {
+      attempt++;
+      const ac = new AbortController();
+      abortControllers.set(id, ac);
+
+      const response = inputImageFiles.length
+        ? await callEdits(prompt, params, inputImageFiles, ac.signal)
+        : await callGenerations(prompt, params, ac.signal);
+
+      abortControllers.delete(id);
+      if (!pendingEntries.has(id)) return;
+
+      const fmt = params?.format === 'jpeg' ? 'jpeg' : params?.format === 'webp' ? 'webp' : 'png';
+      entry.images = (response?.data || []).map((item, idx) => {
+        if (item.url) return item.url;
+        const filename = `${entry.id}-${idx}.${fmt}`;
+        fs.writeFileSync(path.join(IMAGES_DIR, filename), Buffer.from(item.b64_json, 'base64'));
+        return `/images/${filename}`;
+      });
+      entry.status = 'completed';
+      entry.error  = undefined;
+      history.push(entry);
+      saveHistory();
+      pendingEntries.delete(id);
+      broadcast({ type: 'completed', entry });
+    } catch (err) {
+      abortControllers.delete(id);
+      if (err.name === 'AbortError') return;
+      console.error('生成エラー:', err.message);
+      entry.error = err.message;
+
+      if (attempt < MAX_RETRIES) {
+        if (!pendingEntries.has(id)) return;
+        entry.retries = attempt;
+        entry.status  = 'retrying';
+        broadcast({ type: 'retry', id: entry.id, retries: entry.retries, error: entry.error });
+        tryGenerate();
+      } else {
+        entry.retries = attempt;
+        entry.status  = 'error';
+        history.push(entry);
+        saveHistory();
+        pendingEntries.delete(id);
+        broadcast({ type: 'error', id: entry.id, error: err.message, entry });
+      }
+    }
+  }
+
+  tryGenerate();
+}
+
+// ---- ルートハンドラ ----
+async function handleEvents(req, res) {
+  res.writeHead(200, {
+    'Content-Type':  'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection':    'keep-alive',
+  });
+  res.write('retry: 2000\n\n');
+  sendInitialState(res);
+  const client    = { res };
+  const heartbeat = setInterval(() => res.write('event: heartbeat\ndata: {}\n\n'), 10000);
+  clients.add(client);
+  req.on('close', () => { clearInterval(heartbeat); clients.delete(client); });
+}
+
+async function handleHistory(_req, res) {
+  jsonResponse(res, 200, { history });
+}
+
+async function handleDelete(req, res) {
+  const data = parseJSON(await readBody(req));
+  if (!data) return jsonResponse(res, 400, { error: 'JSON が不正です' });
+  const { id } = data;
+  if (!id || typeof id !== 'string') return jsonResponse(res, 400, { error: 'id が必要です' });
+  const idx = history.findIndex(e => e.id === id);
+  if (idx === -1) return jsonResponse(res, 404, { error: 'エントリが見つかりません' });
+  history.splice(idx, 1);
+  saveHistory();
+  broadcast({ type: 'deleted', id });
+  jsonResponse(res, 200, { status: 'deleted' });
+}
+
+async function handleCancel(req, res) {
+  const data = parseJSON(await readBody(req));
+  if (!data) return jsonResponse(res, 400, { error: 'JSON が不正です' });
+  const { id } = data;
+  if (!id || typeof id !== 'string') return jsonResponse(res, 400, { error: 'id が必要です' });
+  if (!pendingEntries.has(id)) return jsonResponse(res, 404, { error: 'エントリが見つからないか、既に完了しています' });
+  abortControllers.get(id)?.abort();
+  abortControllers.delete(id);
+  pendingEntries.delete(id);
+  broadcast({ type: 'cancelled', id });
+  jsonResponse(res, 200, { status: 'cancelled' });
+}
+
+async function handleGenerate(req, res) {
+  const data = parseJSON(await readBody(req));
+  if (!data) return jsonResponse(res, 400, { error: 'JSON が不正です' });
+  const { prompt, params, inputImages } = data;
+  if (!prompt || typeof prompt !== 'string') return jsonResponse(res, 400, { error: 'prompt が必要です' });
+
+  const savedInputImagePaths = [];
+  const inputImageFiles = [];
+  if (Array.isArray(inputImages) && inputImages.length > 0) {
+    const reqId = generateId();
+    for (let i = 0; i < inputImages.length; i++) {
+      const img = inputImages[i];
+      if (!img?.dataUrl) continue;
+      const match = img.dataUrl.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
+      if (!match) continue;
+      const mimeType = match[1];
+      const ext      = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : 'png';
+      const filename = `input-${reqId}-${i}.${ext}`;
+      const buffer   = Buffer.from(match[2], 'base64');
+      fs.writeFileSync(path.join(INPUTS_DIR, filename), buffer);
+      savedInputImagePaths.push(`/images/inputs/${filename}`);
+      inputImageFiles.push({ buffer, mimeType, filename });
+    }
+  }
+
+  jsonResponse(res, 202, { status: 'queued' });
+
+  const id    = generateId();
+  const entry = {
+    id,
+    prompt,
+    params:      params || {},
+    images:      [],
+    inputImages: savedInputImagePaths.length ? savedInputImagePaths : undefined,
+    timestamp:   new Date().toISOString(),
+    retries:     0,
+    status:      'queued',
+  };
+  pendingEntries.set(id, entry);
+  broadcast({ type: 'queued', entry });
+  startGeneration(id, entry, prompt, params || {}, inputImageFiles);
+}
+
+async function handleStaticFile(pathname, res) {
+  const filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname.substring(1));
+  fs.readFile(filePath, (err, data) => {
+    if (err) { res.writeHead(404); res.end('Not found'); return; }
+    const contentType = CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+    res.writeHead(200, { 'Content-Type': contentType });
+    res.end(data);
+  });
+}
+
+// ---- HTTP サーバー ----
+const server = http.createServer(async (req, res) => {
+  const { pathname } = new URL(req.url, 'http://localhost');
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+  try {
+    if (pathname === '/events')                              return await handleEvents(req, res);
+    if (pathname === '/history')                             return await handleHistory(req, res);
+    if (pathname === '/delete'   && req.method === 'POST')  return await handleDelete(req, res);
+    if (pathname === '/cancel'   && req.method === 'POST')  return await handleCancel(req, res);
+    if (pathname === '/generate' && req.method === 'POST')  return await handleGenerate(req, res);
+    await handleStaticFile(pathname, res);
+  } catch (err) {
+    console.error('リクエスト処理エラー:', err);
+    if (!res.headersSent) jsonResponse(res, 500, { error: '内部サーバーエラー' });
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`サーバー起動: http://localhost:${PORT}`);
+});

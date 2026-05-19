@@ -1,0 +1,26 @@
+# 環境変数（APIキーを含む）
+.env
+
+# サーバーの実行時ファイル
+server.pid
+
+# 生成履歴（プロンプト内容を含むためコミット対象外）
+history.json
+
+# 生成・入力画像（バイナリファイル）
+public/images/*.png
+public/images/*.jpg
+public/images/*.jpeg
+public/images/*.webp
+public/images/inputs/*.png
+public/images/inputs/*.jpg
+public/images/inputs/*.jpeg
+public/images/inputs/*.webp
+
+# Node.js
+node_modules/
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+*.log
