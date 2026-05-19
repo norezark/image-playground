@@ -1,4 +1,5 @@
-[!NOTE] このプロジェクトは全てGitHub Copilot製のため、不自然なドキュメントやコードが存在する可能性があります。
+> [!NOTE]
+> このプロジェクトは全てGitHub Copilot製のため、不自然なドキュメントやコードが存在する可能性があります。
 
 # Image Playground
 
