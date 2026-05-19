@@ -13,8 +13,25 @@ OpenAI の画像生成 API を手軽に試せるローカル Web アプリです
 
 ## セットアップ
 
+### 1. API キーの設定
+
+プロジェクトルートに `.env` ファイルを作成し、API キーを記載します。
+
+```
+OPENAI_API_KEY=your_api_key_here
+```
+
+環境変数として直接渡すことも可能です。
+
 ```bash
-# リポジトリをクローンまたはダウンロード後、サーバーを起動するだけです
+OPENAI_API_KEY=your_api_key_here node server.js
+```
+
+`OPENAI_API_KEY` が設定されていない場合、サーバーは起動時にエラーを出力して終了します。
+
+### 2. サーバー起動
+
+```bash
 node server.js
 ```
 
@@ -51,7 +68,7 @@ MAX_RETRIES=5 node server.js
 .\server.ps1 status   # 稼働状況・PID・起動時刻を表示（引数省略時のデフォルト）
 ```
 
-`server.pid` はサーバーが停止すると自動的に削除されます。Git 管理する場合は `.gitignore` に追加してください。
+`server.pid` はサーバーが停止すると自動的に削除されます。
 
 ---
 
@@ -107,7 +124,7 @@ image-playground/
 |---|---|---|
 | **Model** | `gpt-image-2-all`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini` | 使用するモデル |
 | **Number of images** | 1〜8 | 1リクエストで生成する枚数 |
-| **Size** | `1024x1024`, `1024x1536`, `1536x1024`, `2560x1440`, `3840x2160` | 出力解像度 |
+| **Size** | 向き（Auto / 正方形 / 横 / 縦）× アスペクト比（4:3 / 3:2 / 16:9 / 2:1 / 3:1）× 大きさ（S=1024px / M=1536px / L=2048px / XL=2880px）の組み合わせで指定 | 出力解像度 |
 | **Quality** | `low` / `medium` / `high` | 画質 |
 | **Input fidelity** | `low` / `high` | 入力画像の再現度（Edits モード） |
 | **Background** | `opaque` | 背景設定 |
