@@ -29,11 +29,18 @@
           <label>
             Model
             <select name="model" id="model">
-              <option value="gpt-image-2-all">gpt-image-2-all</option>
-              <option value="gpt-image-2">gpt-image-2</option>
-              <option value="gpt-image-1.5">gpt-image-1.5</option>
-              <option value="gpt-image-1">gpt-image-1</option>
-              <option value="gpt-image-1-mini">gpt-image-1-mini</option>
+              <optgroup label="CometAPI">
+                <option value="gpt-image-2-all">gpt-image-2-all</option>
+                <option value="gpt-image-2">gpt-image-2</option>
+                <option value="gpt-image-1.5">gpt-image-1.5</option>
+                <option value="gpt-image-1">gpt-image-1</option>
+                <option value="gpt-image-1-mini">gpt-image-1-mini</option>
+              </optgroup>
+              <optgroup label="Nano Banana (Gemini API)">
+                <option value="gemini-2.5-flash-image">Nano Banana (gemini-2.5-flash-image)</option>
+                <option value="gemini-3.1-flash-image-preview">Nano Banana 2 (gemini-3.1-flash-image-preview)</option>
+                <option value="gemini-3-pro-image-preview">Nano Banana Pro (gemini-3-pro-image-preview)</option>
+              </optgroup>
             </select>
           </label>
           <label>
@@ -63,6 +70,10 @@
           <div class="vis-group-wrap" id="sizeRatioLabel" style="display:none">
             アスペクト比
             <div class="size-vis-group" id="sizeRatioGroup">
+              <button type="button" class="vis-btn" data-value="5:4" title="5:4">
+                <span class="vis-shape" data-lw="35" data-lh="28" style="width:35px;height:28px"></span>
+                <span class="vis-btn-label">5:4</span>
+              </button>
               <button type="button" class="vis-btn active" data-value="4:3" title="4:3">
                 <span class="vis-shape" data-lw="36" data-lh="27" style="width:36px;height:27px"></span>
                 <span class="vis-btn-label">4:3</span>
@@ -75,11 +86,15 @@
                 <span class="vis-shape" data-lw="40" data-lh="22" style="width:40px;height:22px"></span>
                 <span class="vis-btn-label">16:9</span>
               </button>
-              <button type="button" class="vis-btn" data-value="2:1" title="2:1">
+              <button type="button" class="vis-btn" data-value="21:9" title="21:9">
+                <span class="vis-shape" data-lw="42" data-lh="18" style="width:42px;height:18px"></span>
+                <span class="vis-btn-label">21:9</span>
+              </button>
+              <button type="button" class="vis-btn" data-value="2:1" data-no-gemini title="2:1">
                 <span class="vis-shape" data-lw="40" data-lh="20" style="width:40px;height:20px"></span>
                 <span class="vis-btn-label">2:1</span>
               </button>
-              <button type="button" class="vis-btn" data-value="3:1" title="3:1">
+              <button type="button" class="vis-btn" data-value="3:1" data-no-gemini title="3:1">
                 <span class="vis-shape" data-lw="42" data-lh="14" style="width:42px;height:14px"></span>
                 <span class="vis-btn-label">3:1</span>
               </button>
@@ -96,7 +111,55 @@
             </select>
             <span id="sizePreview" style="font-size:0.8em; opacity:0.7; margin-left:0.3em; white-space:nowrap"></span>
           </label>
-          <label>
+          <label id="geminiImageSizeLabel" style="display:none">
+            Image Size
+            <select id="gemini_image_size">
+              <option value="512">512</option>
+              <option value="1K" selected>1K (default)</option>
+              <option value="2K">2K</option>
+              <option value="4K">4K</option>
+            </select>
+          </label>
+          <label id="geminiTemperatureLabel" style="display:none">
+            Temperature
+            <div class="slider-row">
+              <input type="range" id="gemini_temperature" min="0" max="2" step="0.1" value="1">
+              <input type="number" id="gemini_temperature_num" min="0" max="2" step="0.1" value="1" class="slider-num">
+            </div>
+          </label>
+          <label id="geminiTopPLabel" style="display:none">
+            Top P
+            <div class="slider-row">
+              <input type="range" id="gemini_top_p" min="0" max="1" step="0.01" value="0.95">
+              <input type="number" id="gemini_top_p_num" min="0" max="1" step="0.01" value="0.95" class="slider-num">
+            </div>
+          </label>
+          <label id="geminiThinkingLevelLabel" style="display:none">
+            Thinking level
+            <select id="gemini_thinking_level">
+              <option value="">Default</option>
+              <option value="MINIMAL">Minimal</option>
+              <option value="LOW">Low</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="HIGH">High</option>
+            </select>
+          </label>
+          <label id="geminiOutputFormatLabel" style="display:none">
+            Output format
+            <select id="gemini_output_format">
+              <option value="IMAGE_ONLY">Images only</option>
+              <option value="IMAGE_AND_TEXT">Images &amp; text</option>
+            </select>
+          </label>
+          <label id="geminiGroundingWebLabel" class="checkbox-label" style="display:none">
+            <input type="checkbox" id="gemini_grounding_web">
+            Grounding with Google Search
+          </label>
+          <label id="geminiGroundingImageLabel" class="checkbox-label" style="display:none">
+            <input type="checkbox" id="gemini_grounding_image">
+            Image search
+          </label>
+          <label id="qualityLabel">
             Quality
             <select name="quality" id="quality">
               <option value="">Default</option>
@@ -105,7 +168,7 @@
               <option value="high">High</option>
             </select>
           </label>
-          <label>
+          <label id="inputFidelityLabel">
             Input fidelity
             <select name="input_fidelity" id="input_fidelity">
               <option value="">Default</option>
@@ -113,14 +176,14 @@
               <option value="high">High</option>
             </select>
           </label>
-          <label>
+          <label id="backgroundLabel">
             Background
             <select name="background" id="background">
               <option value="">Default</option>
               <option value="opaque">Opaque</option>
             </select>
           </label>
-          <label>
+          <label id="formatLabel">
             Format
             <select name="format" id="format">
               <option value="">Default (png)</option>
@@ -128,11 +191,11 @@
               <option value="webp">WebP</option>
             </select>
           </label>
-          <label>
+          <label id="compressionLabel">
             Compression (0–100)
             <input type="number" name="output_compression" id="output_compression" min="0" max="100" step="1" placeholder="auto">
           </label>
-          <label>
+          <label id="moderationLabel">
             Moderation
             <select name="moderation" id="moderation">
               <option value="">Default (auto)</option>

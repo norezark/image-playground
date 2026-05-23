@@ -3,7 +3,7 @@
 
 # Image Playground
 
-OpenAI の画像生成 API を手軽に試せるローカル Web アプリです。  
+OpenAI CometAPI および Google Gemini の画像生成 API を手軽に試せるローカル Web アプリです。  
 プロンプトと各種パラメータを入力して画像を生成し、結果をリアルタイムで複数デバイスと共有できます。
 
 ## 必要環境
@@ -15,19 +15,25 @@ OpenAI の画像生成 API を手軽に試せるローカル Web アプリです
 
 ### 1. API キーの設定
 
-プロジェクトルートに `.env` ファイルを作成し、API キーを記載します。
+プロジェクトルートに `.env` ファイルを作成し、使用する API のキーを記載します。
+**少なくとも一方**が設定されていれば起動できます。
 
 ```
-OPENAI_API_KEY=your_api_key_here
+# CometAPI （OpenAI 互換プロキシ）
+OPENAI_API_KEY=your_cometapi_key_here
+
+# Nano Banana （Google Gemini ネイティブ画像生成）
+NANO_BANANA_API_KEY=your_gemini_api_key_here
 ```
 
 環境変数として直接渡すことも可能です。
 
 ```bash
-OPENAI_API_KEY=your_api_key_here node server.js
+OPENAI_API_KEY=xxx NANO_BANANA_API_KEY=yyy node server.js
 ```
 
-`OPENAI_API_KEY` が設定されていない場合、サーバーは起動時にエラーを出力して終了します。
+両方が未設定の場合、サーバーは起動時にエラーを出力して終了します。
+片方のみ設定されている場合は警告を表示し、設定済み API のモデルのみ使用できます。
 
 ### 2. サーバー起動
 
@@ -122,15 +128,16 @@ image-playground/
 
 | パラメータ | 値の例 | 説明 |
 |---|---|---|
-| **Model** | `gpt-image-2-all`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini` | 使用するモデル |
-| **Number of images** | 1〜8 | 1リクエストで生成する枚数 |
-| **Size** | 向き（Auto / 正方形 / 横 / 縦）× アスペクト比（4:3 / 3:2 / 16:9 / 2:1 / 3:1）× 大きさ（S=1024px / M=1536px / L=2048px / XL=2880px）の組み合わせで指定 | 出力解像度 |
-| **Quality** | `low` / `medium` / `high` | 画質 |
-| **Input fidelity** | `low` / `high` | 入力画像の再現度（Edits モード） |
-| **Background** | `opaque` | 背景設定 |
-| **Format** | `png`（デフォルト）/ `jpeg` / `webp` | 出力ファイル形式 |
-| **Compression** | 0〜100 | jpeg/webp 圧縮率 |
-| **Moderation** | `auto`（デフォルト）/ `low` | モデレーション厳密度 |
+| **Model** | CometAPI: `gpt-image-2-all`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini` / Nano Banana: `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview` | 使用するモデル |
+| **Number of images** | 1〜8 | 1リクエストで生成する枚数（Gemini はモデル内部で複数呼び出し） |
+| **Size** | 向き（Auto / 正方形 / 横 / 縦）× アスペクト比（5:4 / 4:3 / 3:2 / 16:9 / 21:9 / 2:1 / 3:1）× 大きさ（S=1024px / M=1536px / L=2048px / XL=2880px）の組み合わせで指定（CometAPI）。Nano Banana では向き＋アスペクト比から Gemini の `aspectRatio` パラメータに変換（`5:4`/`4:5`・`4:3`/`3:4`・`3:2`/`2:3`・`16:9`/`9:16`・`21:9` のみ対応、`2:1`/`3:1` は Gemini 選択時は非表示） | CometAPI の出力解像度 / Nano Banana のアスペクト比 |
+| **Image Size** *(Nano Banana のみ)* | `512` / `1K`（デフォルト） / `2K` / `4K` | Gemini 画像の最大辺ピクセル数（`gemini-2.5-flash-image` は非対応） |
+| **Quality** | `low` / `medium` / `high` | 画質（CometAPI のみ） |
+| **Input fidelity** | `low` / `high` | 入力画像の再現度（Edits モード・ CometAPI のみ） |
+| **Background** | `opaque` | 背景設定（CometAPI のみ） |
+| **Format** | `png`（デフォルト）/ `jpeg` / `webp` | 出力ファイル形式（CometAPI のみ。Gemini は PNG 固定） |
+| **Compression** | 0っ100 | jpeg/webp 圧縮率（CometAPI のみ） |
+| **Moderation** | `auto`（デフォルト）/ `low` | モデレーション厳密度（CometAPI のみ） |
 
 ---
 

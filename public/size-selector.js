@@ -2,11 +2,32 @@
 
 import { updatePriceEstimate } from './price-estimate.js';
 
+// Gemini API 用アスペクト比マッピング
+const GEMINI_ASPECT_RATIO_MAP = {
+  '5:4':  { landscape: '5:4',  portrait: '4:5'  },
+  '4:3':  { landscape: '4:3',  portrait: '3:4'  },
+  '3:2':  { landscape: '3:2',  portrait: '2:3'  },
+  '16:9': { landscape: '16:9', portrait: '9:16' },
+  '21:9': { landscape: '21:9', portrait: null   },
+  '2:1':  { landscape: null,   portrait: null   },
+  '3:1':  { landscape: null,   portrait: null   },
+};
+
+export function computeGeminiAspectRatio(orientation, ratio) {
+  if (orientation === 'auto')   return null;
+  if (orientation === 'square') return '1:1';
+  const entry = GEMINI_ASPECT_RATIO_MAP[ratio];
+  if (!entry) return null;
+  return entry[orientation === 'portrait' ? 'portrait' : 'landscape'] || null;
+}
+
 export const SIZE_TIERS = { S: 1024, M: 1536, L: 2048, XL: 2880 };
 const ASPECT_RATIOS_MAP = {
+  '5:4':  [5, 4],
   '4:3':  [4, 3],
   '3:2':  [3, 2],
   '16:9': [16, 9],
+  '21:9': [21, 9],
   '2:1':  [2, 1],
   '3:1':  [3, 1],
 };

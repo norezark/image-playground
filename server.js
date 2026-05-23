@@ -18,14 +18,26 @@ if (fs.existsSync(envFile)) {
 }
 
 // ---- 設定 ----
-const PORT        = process.env.PORT || 8000;
-const MAX_RETRIES = Number(process.env.MAX_RETRIES) || 10;
-const API_KEY     = process.env.OPENAI_API_KEY;
-const API_BASE    = 'https://api.cometapi.com/v1/images';
+const PORT              = process.env.PORT || 8000;
+const MAX_RETRIES       = Number(process.env.MAX_RETRIES) || 10;
+const API_KEY           = process.env.OPENAI_API_KEY;
+const NANO_BANANA_API_KEY = process.env.NANO_BANANA_API_KEY;
+const API_BASE          = 'https://api.cometapi.com/v1/images';
+const GEMINI_API_BASE   = 'https://generativelanguage.googleapis.com/v1beta';
 
-if (!API_KEY) {
-  console.error('エラー: 環境変数 OPENAI_API_KEY が設定されていません。.env ファイルを確認してください。');
+if (!API_KEY && !NANO_BANANA_API_KEY) {
+  console.error('エラー: OPENAI_API_KEY または NANO_BANANA_API_KEY が設定されていません。.env ファイルを確認してください。');
   process.exit(1);
+}
+if (!API_KEY) {
+  console.warn('警告: OPENAI_API_KEY が未設定です。CometAPI モデルは使用できません。');
+}
+if (!NANO_BANANA_API_KEY) {
+  console.warn('警告: NANO_BANANA_API_KEY が未設定です。Nano Banana モデルは使用できません。');
+}
+
+function isGeminiModel(model) {
+  return typeof model === 'string' && model.startsWith('gemini-');
 }
 
 const HISTORY_FILE = path.join(__dirname, 'history.json');
@@ -173,6 +185,97 @@ async function callEdits(prompt, params, inputImageFiles, signal) {
   });
 }
 
+// ---- Gemini API 呼び出し ----
+async function callGemini(prompt, params, inputImageFiles, signal) {
+  if (!NANO_BANANA_API_KEY) {
+    throw new Error('NANO_BANANA_API_KEY が設定されていません');
+  }
+  const model = params.model;
+  const n     = Math.max(1, Number(params.n) || 1);
+
+  const parts = [{ text: prompt }];
+  for (const img of inputImageFiles) {
+    parts.push({
+      inlineData: {
+        mimeType: img.mimeType,
+        data:     img.buffer.toString('base64'),
+      },
+    });
+  }
+
+  const modalities = params.gemini_output_format === 'IMAGE_AND_TEXT' ? ['TEXT', 'IMAGE'] : ['IMAGE'];
+  const generationConfig = { responseModalities: modalities };
+  const aspectRatio  = params.gemini_aspect_ratio;
+  const imageSize    = params.gemini_image_size;
+  const useImageSize = imageSize && model !== 'gemini-2.5-flash-image';
+  if (aspectRatio || useImageSize) {
+    generationConfig.imageConfig = {};
+    if (aspectRatio)    generationConfig.imageConfig.aspectRatio = aspectRatio;
+    if (useImageSize)   generationConfig.imageConfig.imageSize   = imageSize;
+  }
+  if (params.gemini_temperature !== undefined && params.gemini_temperature !== null) {
+    generationConfig.temperature = Number(params.gemini_temperature);
+  }
+  if (params.gemini_top_p !== undefined && params.gemini_top_p !== null) {
+    generationConfig.topP = Number(params.gemini_top_p);
+  }
+  if (params.gemini_thinking_level) {
+    generationConfig.thinkingConfig = { thinkingLevel: params.gemini_thinking_level };
+  }
+
+  const supportsImageSearch = model === 'gemini-3.1-flash-image-preview';
+  const useWebSearch   = !!params.gemini_grounding_web;
+  const useImageSearch = !!params.gemini_grounding_image && supportsImageSearch;
+  const tools = [];
+  if (useWebSearch || useImageSearch) {
+    if (useWebSearch && !useImageSearch) {
+      tools.push({ googleSearch: {} });
+    } else {
+      const searchTypes = {};
+      if (useWebSearch)   searchTypes.webSearch   = {};
+      if (useImageSearch) searchTypes.imageSearch = {};
+      tools.push({ googleSearch: { searchTypes } });
+    }
+  }
+
+  const body = { contents: [{ parts }], generationConfig };
+  if (tools.length > 0) body.tools = tools;
+  const url  = `${GEMINI_API_BASE}/models/${model}:generateContent`;
+
+  const makeRequest = () => apiFetch(url, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': NANO_BANANA_API_KEY },
+    body:    JSON.stringify(body),
+    signal,
+  });
+
+  const results = await Promise.all(Array.from({ length: n }, makeRequest));
+
+  const data = [];
+  const textReasons = [];
+  for (const res of results) {
+    const candidate = res?.candidates?.[0];
+    const finishReason = candidate?.finishReason;
+    for (const part of (candidate?.content?.parts || [])) {
+      if (!part.thought && part.inlineData?.data) {
+        data.push({ b64_json: part.inlineData.data, mime_type: part.inlineData.mimeType || 'image/png' });
+      } else if (part.text) {
+        textReasons.push(part.text.trim());
+      }
+    }
+    if (data.length === 0 && finishReason && finishReason !== 'STOP') {
+      textReasons.push(`finishReason: ${finishReason}`);
+    }
+  }
+
+  if (data.length === 0) {
+    const reason = textReasons.filter(Boolean).join(' / ') || '画像が生成されませんでした（モデレーションによりブロックされた可能性があります）';
+    throw new Error(reason);
+  }
+
+  return { data };
+}
+
 // ---- 画像生成（リトライ付き） ----
 function startGeneration(id, entry, prompt, params, inputImageFiles) {
   let attempt = 0;
@@ -184,9 +287,11 @@ function startGeneration(id, entry, prompt, params, inputImageFiles) {
       const ac = new AbortController();
       abortControllers.set(id, ac);
 
-      const response = inputImageFiles.length
-        ? await callEdits(prompt, params, inputImageFiles, ac.signal)
-        : await callGenerations(prompt, params, ac.signal);
+      const response = isGeminiModel(params?.model)
+        ? await callGemini(prompt, params, inputImageFiles, ac.signal)
+        : inputImageFiles.length
+          ? await callEdits(prompt, params, inputImageFiles, ac.signal)
+          : await callGenerations(prompt, params, ac.signal);
 
       abortControllers.delete(id);
       if (!pendingEntries.has(id)) return;
@@ -194,7 +299,8 @@ function startGeneration(id, entry, prompt, params, inputImageFiles) {
       const fmt = params?.format === 'jpeg' ? 'jpeg' : params?.format === 'webp' ? 'webp' : 'png';
       entry.images = (response?.data || []).map((item, idx) => {
         if (item.url) return item.url;
-        const filename = `${entry.id}-${idx}.${fmt}`;
+        const itemFmt = item.mime_type === 'image/jpeg' ? 'jpeg' : item.mime_type === 'image/webp' ? 'webp' : fmt;
+        const filename = `${entry.id}-${idx}.${itemFmt}`;
         fs.writeFileSync(path.join(IMAGES_DIR, filename), Buffer.from(item.b64_json, 'base64'));
         return `/images/${filename}`;
       });
