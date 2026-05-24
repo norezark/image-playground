@@ -209,7 +209,7 @@ select:focus, input[type="number"]:focus, textarea:focus {
 }
 
 .checkbox-label {
-  display: flex !important;
+  display: flex;
   flex-direction: row !important;
   align-items: center;
   gap: 0.5rem;

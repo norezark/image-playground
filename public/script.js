@@ -59,7 +59,8 @@ function updateModelSpecificUI() {
       setVisualGroup('sizeRatioGroup', 'sizeRatio', '4:3');
     }
   });
-  updatePriceEstimate();
+  // sizeTierLabel の表示状態をモデルに合わせて再評価する（Gemini では常に非表示）
+  updateSizeSelectors();
 }
 
 // ---- Gemini スライダーと数値入力の同期 ----

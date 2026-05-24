@@ -90,12 +90,14 @@ export function setVisualGroup(groupId, inputId, value) {
 }
 
 export function updateSizeSelectors() {
+  const model     = document.getElementById('model').value;
+  const isGemini  = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'].includes(model);
   const orientation = document.getElementById('sizeOrientation').value;
   const isAuto      = orientation === 'auto';
   const isSquare    = orientation === 'square';
   const isPortrait  = orientation === 'portrait';
   document.getElementById('sizeRatioLabel').style.display = (isAuto || isSquare) ? 'none' : '';
-  document.getElementById('sizeTierLabel').style.display  = isAuto ? 'none' : '';
+  document.getElementById('sizeTierLabel').style.display  = (isAuto || isGemini) ? 'none' : '';
 
   document.querySelectorAll('#sizeRatioGroup .vis-shape[data-lw]').forEach(shape => {
     const { lw, lh } = shape.dataset;
