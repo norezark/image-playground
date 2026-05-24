@@ -5,7 +5,11 @@
 server.pid
 
 # 生成履歴（プロンプト内容を含むためコミット対象外）
+history.db
+history.db-shm
+history.db-wal
 history.json
+history.json.bak
 
 # 生成・入力画像（バイナリファイル）
 public/images/*.png

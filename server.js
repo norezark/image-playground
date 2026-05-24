@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { DatabaseSync } = require('node:sqlite');
 
 // ---- .env ファイルの読み込み（dotenv 不使用） ----
 const envFile = path.join(__dirname, '.env');
@@ -40,7 +41,8 @@ function isGeminiModel(model) {
   return typeof model === 'string' && model.startsWith('gemini-');
 }
 
-const HISTORY_FILE = path.join(__dirname, 'history.json');
+const HISTORY_DB   = path.join(__dirname, 'history.db');
+const HISTORY_FILE = path.join(__dirname, 'history.json'); // マイグレーション用
 const PUBLIC_DIR   = path.join(__dirname, 'public');
 const IMAGES_DIR   = path.join(PUBLIC_DIR, 'images');
 const INPUTS_DIR   = path.join(IMAGES_DIR, 'inputs');
@@ -62,14 +64,100 @@ for (const dir of [IMAGES_DIR, INPUTS_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-let history = [];
-try {
-  if (fs.existsSync(HISTORY_FILE)) {
-    history = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
-  }
-} catch (err) {
-  console.error('履歴ファイルの読み込みに失敗しました:', err);
+// ---- SQLite 初期化 ----
+const db = new DatabaseSync(HISTORY_DB);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS entries (
+    id          TEXT PRIMARY KEY,
+    prompt      TEXT NOT NULL,
+    params      TEXT NOT NULL,
+    images      TEXT NOT NULL,
+    input_images TEXT,
+    timestamp   TEXT NOT NULL,
+    retries     INTEGER DEFAULT 0,
+    status      TEXT NOT NULL,
+    error       TEXT
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_timestamp ON entries (timestamp DESC)`);
+
+const _stmtInsert = db.prepare(
+  `INSERT OR REPLACE INTO entries (id, prompt, params, images, input_images, timestamp, retries, status, error)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const _stmtDelete  = db.prepare(`DELETE FROM entries WHERE id = ?`);
+const _stmtAll     = db.prepare(`SELECT * FROM entries ORDER BY timestamp DESC`);
+const _stmtFindIdx = db.prepare(`SELECT id FROM entries WHERE id = ?`);
+
+function _rowToEntry(row) {
+  return {
+    id:          row.id,
+    prompt:      row.prompt,
+    params:      JSON.parse(row.params),
+    images:      JSON.parse(row.images),
+    inputImages: row.input_images ? JSON.parse(row.input_images) : undefined,
+    timestamp:   row.timestamp,
+    retries:     row.retries,
+    status:      row.status,
+    error:       row.error || undefined,
+  };
 }
+
+function dbSaveEntry(entry) {
+  _stmtInsert.run(
+    entry.id,
+    entry.prompt,
+    JSON.stringify(entry.params || {}),
+    JSON.stringify(entry.images || []),
+    entry.inputImages ? JSON.stringify(entry.inputImages) : null,
+    entry.timestamp,
+    entry.retries || 0,
+    entry.status,
+    entry.error || null,
+  );
+}
+
+function dbDeleteEntry(id) {
+  _stmtDelete.run(id);
+}
+
+function dbLoadHistory() {
+  return _stmtAll.all().map(_rowToEntry);
+}
+
+// ---- history.json からの移行 ----
+if (fs.existsSync(HISTORY_FILE)) {
+  try {
+    const legacy = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
+    if (Array.isArray(legacy) && legacy.length > 0) {
+      const migrate = db.prepare(
+        `INSERT OR IGNORE INTO entries (id, prompt, params, images, input_images, timestamp, retries, status, error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      db.exec('BEGIN');
+      for (const e of legacy) {
+        try {
+          migrate.run(
+            e.id, e.prompt,
+            JSON.stringify(e.params || {}),
+            JSON.stringify(e.images || []),
+            e.inputImages ? JSON.stringify(e.inputImages) : null,
+            e.timestamp, e.retries || 0,
+            e.status || 'completed',
+            e.error || null,
+          );
+        } catch { /* skip invalid entries */ }
+      }
+      db.exec('COMMIT');
+      console.log(`history.json から ${legacy.length} 件を SQLite へ移行しました。`);
+      fs.renameSync(HISTORY_FILE, HISTORY_FILE + '.bak');
+    }
+  } catch (err) {
+    console.error('history.json の移行に失敗しました:', err);
+  }
+}
+
+let history = dbLoadHistory();
 
 // ---- 状態管理 ----
 const clients          = new Set();
@@ -81,13 +169,7 @@ function generateId() {
   return crypto.randomBytes(12).toString('base64url');
 }
 
-function saveHistory() {
-  try {
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
-  } catch (err) {
-    console.error('履歴の保存に失敗しました:', err);
-  }
-}
+// saveHistory は廃止。dbSaveEntry / dbDeleteEntry を直接使用する。
 
 function broadcast(message) {
   const data = JSON.stringify(message);
@@ -306,8 +388,8 @@ function startGeneration(id, entry, prompt, params, inputImageFiles) {
       });
       entry.status = 'completed';
       entry.error  = undefined;
-      history.push(entry);
-      saveHistory();
+      history.unshift(entry);
+      dbSaveEntry(entry);
       pendingEntries.delete(id);
       broadcast({ type: 'completed', entry });
     } catch (err) {
@@ -325,8 +407,8 @@ function startGeneration(id, entry, prompt, params, inputImageFiles) {
       } else {
         entry.retries = attempt;
         entry.status  = 'error';
-        history.push(entry);
-        saveHistory();
+        history.unshift(entry);
+        dbSaveEntry(entry);
         pendingEntries.delete(id);
         broadcast({ type: 'error', id: entry.id, error: err.message, entry });
       }
@@ -361,9 +443,9 @@ async function handleDelete(req, res) {
   const { id } = data;
   if (!id || typeof id !== 'string') return jsonResponse(res, 400, { error: 'id が必要です' });
   const idx = history.findIndex(e => e.id === id);
-  if (idx === -1) return jsonResponse(res, 404, { error: 'エントリが見つかりません' });
-  history.splice(idx, 1);
-  saveHistory();
+  if (idx === -1 && !_stmtFindIdx.get(id)) return jsonResponse(res, 404, { error: 'エントリが見つかりません' });
+  if (idx !== -1) history.splice(idx, 1);
+  dbDeleteEntry(id);
   broadcast({ type: 'deleted', id });
   jsonResponse(res, 200, { status: 'deleted' });
 }

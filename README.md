@@ -8,7 +8,7 @@ OpenAI CometAPI および Google Gemini の画像生成 API を手軽に試せ�
 
 ## 必要環境
 
-- **Node.js v18 以上**（`fetch` / `FormData` / `Blob` の組み込み実装を使用）
+- **Node.js v22.5 以上**（`fetch` / `FormData` / `Blob` / `node:sqlite` の組み込み実装を使用）
 - 外部 npm パッケージは不要
 
 ## セットアップ
@@ -84,7 +84,7 @@ MAX_RETRIES=5 node server.js
 image-playground/
 ├── server.js          # Node.js HTTP サーバー
 ├── server.ps1         # サーバー管理スクリプト (start/stop/restart/status)
-├── history.json       # 生成履歴（自動生成）
+├── history.db         # 生成履歴（SQLite、自動生成）
 ├── server.pid         # バックグラウンド起動時の PID（自動生成）
 └── public/
     ├── index.html
@@ -168,7 +168,7 @@ image-playground/
 
 ### 6. 履歴管理
 
-- 生成結果は `history.json` に永続化される。
+- 生成結果は `history.db`（SQLite）に永続化される。既存の `history.json` がある場合は初回起動時に自動でマイグレーションされ、`history.json.bak` にリネームされる。
 - サーバー再起動後も履歴は復元される。
 - **Delete ボタン**：完了・エラーエントリを個別に削除できる。全クライアントに削除が同期される。
 - **Load ボタン**：過去のエントリのパラメータとプロンプトをフォームに復元する。入力画像があった場合は再取得してドロップゾーンに復元する。
