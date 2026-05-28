@@ -6,11 +6,13 @@ import { deleteEntry, cancelEntry } from './api.js';
 
 const historyList = document.getElementById('historyList');
 
-// script.js から loadParams コールバックを受け取る
+// script.js から loadParams / editWithImage コールバックを受け取る
 let _loadParams = null;
+let _editWithImage = null;
 
-export function initHistory(loadParams) {
+export function initHistory(loadParams, editWithImage) {
   _loadParams = loadParams;
+  _editWithImage = editWithImage;
 }
 
 export function renderHistory(entries) {
@@ -83,6 +85,7 @@ function renderImageTile(entry, imgUrl) {
     el('div', { class: 'tile-actions' }, [
       actionBtn,
       el('button', { class: 'load-button', text: 'Load', onclick: () => _loadParams?.(entry) }),
+      ...(imgUrl ? [el('button', { class: 'edit-button', text: 'Edit', onclick: () => _editWithImage?.(imgUrl) })] : []),
     ]),
   ]);
 

@@ -175,8 +175,27 @@ async function loadParams(entry) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// history.js に loadParams コールバックを登録
-initHistory(loadParams);
+// ---- 生成結果画像を入力として編集開始 ----
+async function editWithImage(imgUrl) {
+  clearInputImages();
+  try {
+    const res     = await fetch(imgUrl);
+    const blob    = await res.blob();
+    const dataUrl = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.readAsDataURL(blob);
+    });
+    addInputImage({ dataUrl, mimeType: blob.type, name: imgUrl.split('/').pop() });
+  } catch (e) {
+    console.warn('画像の読み込み失敗', imgUrl, e);
+  }
+  renderInputThumbnails();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// history.js に loadParams / editWithImage コールバックを登録
+initHistory(loadParams, editWithImage);
 
 // ---- フォーム送信 ----
 document.getElementById('generateForm').addEventListener('submit', async (e) => {

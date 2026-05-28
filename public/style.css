@@ -513,7 +513,7 @@ button[type="submit"]:hover {
   white-space: nowrap;
 }
 
-.load-button, .cancel-button, .delete-button {
+.load-button, .cancel-button, .delete-button, .edit-button {
   padding: 0.25rem 0.5rem;
   font-size: 0.75rem;
   border-radius: 5px;
@@ -529,6 +529,16 @@ button[type="submit"]:hover {
 
 .load-button:hover {
   background: rgba(88, 166, 255, 0.12);
+}
+
+.edit-button {
+  border: 1px solid #3fb950;
+  background: transparent;
+  color: #3fb950;
+}
+
+.edit-button:hover {
+  background: rgba(63, 185, 80, 0.12);
 }
 
 .cancel-button {
