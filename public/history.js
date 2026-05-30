@@ -82,6 +82,7 @@ function renderImageTile(entry, imgUrl) {
       el('span', { class: 'tile-params', text: paramsText }),
       el('span', { class: 'status', text: statusLabel(entry) }),
     ]),
+    ...(entry.timestamp ? [el('div', { class: 'tile-timestamp', text: new Date(entry.timestamp).toLocaleString('ja-JP') })] : []),
     el('div', { class: 'tile-actions' }, [
       actionBtn,
       el('button', { class: 'load-button', text: 'Load', onclick: () => _loadParams?.(entry) }),

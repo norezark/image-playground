@@ -484,6 +484,14 @@ button[type="submit"]:hover {
   justify-content: space-between;
   align-items: center;
   gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.tile-timestamp {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  opacity: 0.75;
 }
 
 .tile-params {
