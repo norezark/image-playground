@@ -3,7 +3,7 @@
 import { inputImages, renderInputThumbnails, clearInputImages, addInputImage } from './image-input.js';
 import { computeResolution, computeGeminiAspectRatio, sizeToSelects, setVisualGroup, updateSizeSelectors } from './size-selector.js';
 import { updatePriceEstimate } from './price-estimate.js';
-import { renderHistory, initHistory } from './history.js';
+import { renderHistory, initHistory, setFavoritesFilter } from './history.js';
 import { postJSON } from './api.js';
 // lightbox は history.js 経由で自動初期化される
 
@@ -81,6 +81,19 @@ document.getElementById('model').addEventListener('change', updateModelSpecificU
 updateModelSpecificUI();
 
 
+
+function _favFilterHtml(active) {
+  return `<svg viewBox="0 0 24 24" width="11" height="11" fill="${active ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" style="vertical-align:-1px"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> お気に入り`;
+}
+
+// ---- お気に入りフィルタートグル ----
+const favFilterBtn = document.getElementById('favFilterBtn');
+favFilterBtn.addEventListener('click', () => {
+  const enabled = favFilterBtn.classList.toggle('active');
+  favFilterBtn.innerHTML = _favFilterHtml(enabled);
+  setFavoritesFilter(enabled);
+  renderHistory(entries);
+});
 
 // ---- 表示倍率トグル ----
 const historyList = document.getElementById('historyList');
@@ -355,6 +368,18 @@ function handleUpdate(message) {
     case 'deleted':
       entries.delete(message.id);
       break;
+    case 'favorited': {
+      const entry = entries.get(message.id);
+      if (entry) {
+        entry.favoritedImages = entry.favoritedImages || [];
+        if (message.favorited) {
+          if (!entry.favoritedImages.includes(message.imgUrl)) entry.favoritedImages.push(message.imgUrl);
+        } else {
+          entry.favoritedImages = entry.favoritedImages.filter(u => u !== message.imgUrl);
+        }
+      }
+      break;
+    }
     default:
       console.warn('不明なメッセージタイプ', message);
   }

@@ -353,6 +353,36 @@ button[type="submit"]:hover {
   margin: 0;
 }
 
+.section-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.fav-filter-btn {
+  padding: 0.25rem 0.65rem;
+  font-size: 0.75rem;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.fav-filter-btn:hover {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.fav-filter-btn.active {
+  color: #ff6b8a;
+  border-color: #ff6b8a;
+  background: rgba(255, 107, 138, 0.12);
+}
+
 .fit-toggle {
   display: flex;
   gap: 0;
@@ -596,6 +626,42 @@ button[type="submit"]:hover {
   font-size: 0.72rem;
   word-break: break-word;
   line-height: 1.35;
+}
+
+/* Favorite overlay button */
+.fav-button {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  background: rgba(0, 0, 0, 0.55);
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s, opacity 0.15s;
+  opacity: 0;
+  z-index: 10;
+  padding: 0;
+}
+
+.tile-image:hover .fav-button {
+  opacity: 1;
+}
+
+.fav-button.is-favorited {
+  color: #ff6b8a;
+  opacity: 1;
+}
+
+.fav-button:hover {
+  background: rgba(0, 0, 0, 0.8);
+  color: #ff6b8a;
 }
 
 .spinner {

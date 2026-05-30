@@ -210,9 +210,12 @@
     <section id="history">
       <div class="section-header">
         <h2>Generation History</h2>
-        <div class="fit-toggle" id="fitToggle" aria-label="Image scaling">
-          <button class="fit-btn" data-fit="cover" title="Cover (crop)">Cover</button>
-          <button class="fit-btn" data-fit="contain" title="Contain (letterbox)">Contain</button>
+        <div class="section-header-controls">
+          <button id="favFilterBtn" class="fav-filter-btn" title="お気に入りのみ表示"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" style="vertical-align:-1px"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> お気に入り</button>
+          <div class="fit-toggle" id="fitToggle" aria-label="Image scaling">
+            <button class="fit-btn" data-fit="cover" title="Cover (crop)">Cover</button>
+            <button class="fit-btn" data-fit="contain" title="Contain (letterbox)">Contain</button>
+          </div>
         </div>
       </div>
       <div id="historyList" data-fit="cover"></div>

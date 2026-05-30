@@ -2,27 +2,35 @@
 
 import { el } from './utils.js';
 import { openLightbox } from './lightbox.js';
-import { deleteEntry, cancelEntry } from './api.js';
+import { deleteEntry, cancelEntry, toggleFavorite } from './api.js';
 
 const historyList = document.getElementById('historyList');
 
 // script.js から loadParams / editWithImage コールバックを受け取る
 let _loadParams = null;
 let _editWithImage = null;
+let _showFavoritesOnly = false;
 
 export function initHistory(loadParams, editWithImage) {
   _loadParams = loadParams;
   _editWithImage = editWithImage;
 }
 
+export function setFavoritesFilter(enabled) {
+  _showFavoritesOnly = enabled;
+}
+
 export function renderHistory(entries) {
-  const sorted = Array.from(entries.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const all = Array.from(entries.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   historyList.innerHTML = '';
-  for (const entry of sorted) {
+  for (const entry of all) {
     if (entry.images?.length) {
-      entry.images.forEach(imgUrl => historyList.appendChild(renderImageTile(entry, imgUrl)));
+      entry.images.forEach(imgUrl => {
+        if (_showFavoritesOnly && !entry.favoritedImages?.includes(imgUrl)) return;
+        historyList.appendChild(renderImageTile(entry, imgUrl));
+      });
     } else {
-      historyList.appendChild(renderImageTile(entry, null));
+      if (!_showFavoritesOnly) historyList.appendChild(renderImageTile(entry, null));
     }
   }
 }
@@ -49,6 +57,14 @@ function renderImageTile(entry, imgUrl) {
   if (imgUrl) {
     tileImage.appendChild(el('img', { src: imgUrl, onclick: () => openLightbox(imgUrl) }));
     tileImage.style.cursor = 'zoom-in';
+    const isFav = !!entry.favoritedImages?.includes(imgUrl);
+    const favBtn = el('button', {
+      class: `fav-button${isFav ? ' is-favorited' : ''}`,
+      title: isFav ? 'お気に入り解除' : 'お気に入りに追加',
+      onclick: () => toggleFavorite(entry.id, imgUrl, !entry.favoritedImages?.includes(imgUrl)),
+    });
+    favBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="${isFav ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+    tileImage.appendChild(favBtn);
   } else if (status === 'error' && entry.error) {
     tileImage.appendChild(el('div', { class: 'tile-error-overlay' }, [
       el('span', { class: 'tile-error-icon', text: '\u26A0' }),

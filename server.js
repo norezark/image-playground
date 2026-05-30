@@ -76,30 +76,37 @@ db.exec(`
     timestamp   TEXT NOT NULL,
     retries     INTEGER DEFAULT 0,
     status      TEXT NOT NULL,
-    error       TEXT
+    error       TEXT,
+    favorited   INTEGER DEFAULT 0
   )
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_timestamp ON entries (timestamp DESC)`);
+// favorited カラムが存在しない場合は追加（旧 DB の後方互換）
+try { db.exec('ALTER TABLE entries ADD COLUMN favorited INTEGER DEFAULT 0'); } catch {}
+// favorited_images カラムが存在しない場合は追加
+try { db.exec('ALTER TABLE entries ADD COLUMN favorited_images TEXT DEFAULT NULL'); } catch {}
 
 const _stmtInsert = db.prepare(
-  `INSERT OR REPLACE INTO entries (id, prompt, params, images, input_images, timestamp, retries, status, error)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  `INSERT OR REPLACE INTO entries (id, prompt, params, images, input_images, timestamp, retries, status, error, favorited_images)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 );
+const _stmtFavoriteImages = db.prepare(`UPDATE entries SET favorited_images = ? WHERE id = ?`);
 const _stmtDelete  = db.prepare(`DELETE FROM entries WHERE id = ?`);
 const _stmtAll     = db.prepare(`SELECT * FROM entries ORDER BY timestamp DESC`);
 const _stmtFindIdx = db.prepare(`SELECT id FROM entries WHERE id = ?`);
 
 function _rowToEntry(row) {
   return {
-    id:          row.id,
-    prompt:      row.prompt,
-    params:      JSON.parse(row.params),
-    images:      JSON.parse(row.images),
-    inputImages: row.input_images ? JSON.parse(row.input_images) : undefined,
-    timestamp:   row.timestamp,
-    retries:     row.retries,
-    status:      row.status,
-    error:       row.error || undefined,
+    id:             row.id,
+    prompt:         row.prompt,
+    params:         JSON.parse(row.params),
+    images:         JSON.parse(row.images),
+    inputImages:    row.input_images ? JSON.parse(row.input_images) : undefined,
+    timestamp:      row.timestamp,
+    retries:        row.retries,
+    status:         row.status,
+    error:          row.error || undefined,
+    favoritedImages: row.favorited_images ? JSON.parse(row.favorited_images) : [],
   };
 }
 
@@ -114,6 +121,7 @@ function dbSaveEntry(entry) {
     entry.retries || 0,
     entry.status,
     entry.error || null,
+    entry.favoritedImages?.length ? JSON.stringify(entry.favoritedImages) : null,
   );
 }
 
@@ -450,6 +458,28 @@ async function handleDelete(req, res) {
   jsonResponse(res, 200, { status: 'deleted' });
 }
 
+async function handleFavorite(req, res) {
+  const data = parseJSON(await readBody(req));
+  if (!data) return jsonResponse(res, 400, { error: 'JSON が不正です' });
+  const { id, imgUrl, favorited } = data;
+  if (!id || typeof id !== 'string') return jsonResponse(res, 400, { error: 'id が必要です' });
+  if (!imgUrl || typeof imgUrl !== 'string') return jsonResponse(res, 400, { error: 'imgUrl が必要です' });
+  if (!_stmtFindIdx.get(id)) return jsonResponse(res, 404, { error: 'エントリが見つかりません' });
+  const entry = history.find(e => e.id === id);
+  if (entry) {
+    entry.favoritedImages = entry.favoritedImages || [];
+    if (favorited) {
+      if (!entry.favoritedImages.includes(imgUrl)) entry.favoritedImages.push(imgUrl);
+    } else {
+      entry.favoritedImages = entry.favoritedImages.filter(u => u !== imgUrl);
+    }
+  }
+  const newList = entry?.favoritedImages ?? (favorited ? [imgUrl] : []);
+  _stmtFavoriteImages.run(newList.length ? JSON.stringify(newList) : null, id);
+  broadcast({ type: 'favorited', id, imgUrl, favorited: !!favorited });
+  jsonResponse(res, 200, { status: 'ok', favorited: !!favorited });
+}
+
 async function handleCancel(req, res) {
   const data = parseJSON(await readBody(req));
   if (!data) return jsonResponse(res, 400, { error: 'JSON が不正です' });
@@ -531,6 +561,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/history')                             return await handleHistory(req, res);
     if (pathname === '/delete'   && req.method === 'POST')  return await handleDelete(req, res);
     if (pathname === '/cancel'   && req.method === 'POST')  return await handleCancel(req, res);
+    if (pathname === '/favorite' && req.method === 'POST')  return await handleFavorite(req, res);
     if (pathname === '/generate' && req.method === 'POST')  return await handleGenerate(req, res);
     await handleStaticFile(pathname, res);
   } catch (err) {
