@@ -445,6 +445,11 @@ button[type="submit"]:hover {
   border-left: 3px solid var(--accent);
 }
 
+.history-item.is-latest {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
+}
+
 .tile-image {
   width: 100%;
   aspect-ratio: 1 / 1;

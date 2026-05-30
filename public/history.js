@@ -23,14 +23,15 @@ export function setFavoritesFilter(enabled) {
 export function renderHistory(entries) {
   const all = Array.from(entries.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   historyList.innerHTML = '';
+  const latestEntry = all.find(e => e.images?.length);
   for (const entry of all) {
     if (entry.images?.length) {
       entry.images.forEach(imgUrl => {
         if (_showFavoritesOnly && !entry.favoritedImages?.includes(imgUrl)) return;
-        historyList.appendChild(renderImageTile(entry, imgUrl));
+        historyList.appendChild(renderImageTile(entry, imgUrl, entry === latestEntry));
       });
     } else {
-      if (!_showFavoritesOnly) historyList.appendChild(renderImageTile(entry, null));
+      if (!_showFavoritesOnly) historyList.appendChild(renderImageTile(entry, null, false));
     }
   }
 }
@@ -44,7 +45,7 @@ function statusLabel(entry) {
   }
 }
 
-function renderImageTile(entry, imgUrl) {
+function renderImageTile(entry, imgUrl, isLatest = false) {
   const status    = entry.status || (entry.images?.length ? 'completed' : entry.error ? 'error' : 'queued');
   const isPending = status === 'queued' || status === 'retrying';
   const paramsText = Object.entries(entry.params || {})
@@ -107,7 +108,7 @@ function renderImageTile(entry, imgUrl) {
   ]);
 
   return el('div', {
-    class: `history-item${isPending ? ' is-pending' : ''}`,
+    class: `history-item${isPending ? ' is-pending' : ''}${isLatest ? ' is-latest' : ''}`,
     id: `entry-${entry.id}-${imgUrl ?? 'placeholder'}`,
   }, [tileImage, tileFooter]);
 }
