@@ -230,6 +230,13 @@ textarea {
   min-height: 8rem;
 }
 
+@media (pointer: coarse) {
+  textarea {
+    resize: none;
+    overflow-y: hidden;
+  }
+}
+
 button[type="submit"] {
   align-self: flex-start;
   padding: 0.6rem 1.2rem;

@@ -80,6 +80,14 @@ syncSlider('gemini_top_p',       'gemini_top_p_num');
 document.getElementById('model').addEventListener('change', updateModelSpecificUI);
 updateModelSpecificUI();
 
+// ---- プロンプト入力欄のオートグロー（スマホ向け） ----
+const promptTextarea = document.getElementById('prompt');
+function autoGrowPrompt() {
+  promptTextarea.style.height = 'auto';
+  promptTextarea.style.height = promptTextarea.scrollHeight + 'px';
+}
+promptTextarea.addEventListener('input', autoGrowPrompt);
+
 
 
 function _favFilterHtml(active) {
@@ -115,6 +123,7 @@ fitToggle.querySelectorAll('.fit-btn').forEach(btn => {
 // ---- パラメータの復元 ----
 async function loadParams(entry) {
   document.getElementById('prompt').value = entry.prompt;
+  autoGrowPrompt();
   document.getElementById('model').value  = entry.params.model || 'gpt-image-2';
   document.getElementById('n').value      = entry.params.n || 1;
 
