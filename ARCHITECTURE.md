@@ -22,10 +22,14 @@
 
 ```
 image-playground/
-├── server.js              # HTTP サーバー・ルーティング・SSE・生成キュー
+├── server.js              # HTTP サーバー・ルーティング・SSE（~260行）
 ├── server.ps1             # バックグラウンド起動管理スクリプト
 ├── history.db             # 生成履歴（SQLite、自動生成）
 ├── server.pid             # バックグラウンド起動時の PID（自動生成）
+├── lib/
+│   ├── db.js              # SQLite 初期化・マイグレーション・CRUD
+│   ├── api.js             # CometAPI / Gemini API 呼び出し関数
+│   └── generation.js      # 画像生成ループ（リトライ付き）のファクトリ
 └── public/
     ├── index.html         # SPA の唯一の HTML
     ├── style.css          # スタイルシート（ダークテーマ固定）
@@ -43,7 +47,18 @@ image-playground/
 
 ---
 
-## サーバー設計（`server.js`）
+## サーバー設計
+
+### モジュール構成（`lib/`）
+
+| ファイル | 役割 |
+|---|---|
+| `lib/db.js` | SQLite 初期化・`history.json` マイグレーション・`dbSaveEntry` / `dbDeleteEntry` / `dbLoadHistory` などの CRUD |
+| `lib/api.js` | `apiFetch` / `callGenerations` / `callEdits` / `callGemini` / `isGeminiModel` |
+| `lib/generation.js` | `createStartGeneration` ファクトリ。共有状態（`pendingEntries` 等）を引数として受け取り、リトライ付きの `startGeneration` 関数を返す |
+| `server.js` | `.env` 読み込み・設定・状態管理・ルートハンドラ・HTTP サーバー |
+
+> **依存方向**: `server.js` → `lib/*.js`（`lib/` 同士の依存はなし）
 
 ### API エンドポイント
 

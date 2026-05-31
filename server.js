@@ -1,8 +1,7 @@
-﻿const http = require('http');
-const fs = require('fs');
-const path = require('path');
+﻿const http   = require('http');
+const fs     = require('fs');
+const path   = require('path');
 const crypto = require('crypto');
-const { DatabaseSync } = require('node:sqlite');
 
 // ---- .env ファイルの読み込み（dotenv 不使用） ----
 const envFile = path.join(__dirname, '.env');
@@ -19,33 +18,29 @@ if (fs.existsSync(envFile)) {
 }
 
 // ---- 設定 ----
-const PORT              = process.env.PORT || 8000;
-const MAX_RETRIES       = Number(process.env.MAX_RETRIES) || 10;
-const API_KEY           = process.env.OPENAI_API_KEY;
-const NANO_BANANA_API_KEY = process.env.NANO_BANANA_API_KEY;
-const API_BASE          = 'https://api.cometapi.com/v1/images';
-const GEMINI_API_BASE   = 'https://generativelanguage.googleapis.com/v1beta';
+const PORT        = process.env.PORT || 8000;
+const MAX_RETRIES = Number(process.env.MAX_RETRIES) || 10;
 
-if (!API_KEY && !NANO_BANANA_API_KEY) {
+if (!process.env.OPENAI_API_KEY && !process.env.NANO_BANANA_API_KEY) {
   console.error('エラー: OPENAI_API_KEY または NANO_BANANA_API_KEY が設定されていません。.env ファイルを確認してください。');
   process.exit(1);
 }
-if (!API_KEY) {
+if (!process.env.OPENAI_API_KEY) {
   console.warn('警告: OPENAI_API_KEY が未設定です。CometAPI モデルは使用できません。');
 }
-if (!NANO_BANANA_API_KEY) {
+if (!process.env.NANO_BANANA_API_KEY) {
   console.warn('警告: NANO_BANANA_API_KEY が未設定です。Nano Banana モデルは使用できません。');
 }
 
-function isGeminiModel(model) {
-  return typeof model === 'string' && model.startsWith('gemini-');
-}
+// ---- モジュール読み込み（.env ロード後） ----
+const { dbSaveEntry, dbDeleteEntry, dbLoadHistory, _stmtFindIdx, _stmtFavoriteImages } = require('./lib/db');
+const { isGeminiModel, callGenerations, callEdits, callGemini } = require('./lib/api');
+const { createStartGeneration } = require('./lib/generation');
 
-const HISTORY_DB   = path.join(__dirname, 'history.db');
-const HISTORY_FILE = path.join(__dirname, 'history.json'); // マイグレーション用
-const PUBLIC_DIR   = path.join(__dirname, 'public');
-const IMAGES_DIR   = path.join(PUBLIC_DIR, 'images');
-const INPUTS_DIR   = path.join(IMAGES_DIR, 'inputs');
+// ---- パス定数 ----
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const IMAGES_DIR = path.join(PUBLIC_DIR, 'images');
+const INPUTS_DIR = path.join(IMAGES_DIR, 'inputs');
 
 const CONTENT_TYPES = {
   '.html': 'text/html',
@@ -64,107 +59,6 @@ for (const dir of [IMAGES_DIR, INPUTS_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-// ---- SQLite 初期化 ----
-const db = new DatabaseSync(HISTORY_DB);
-db.exec(`
-  CREATE TABLE IF NOT EXISTS entries (
-    id          TEXT PRIMARY KEY,
-    prompt      TEXT NOT NULL,
-    params      TEXT NOT NULL,
-    images      TEXT NOT NULL,
-    input_images TEXT,
-    timestamp   TEXT NOT NULL,
-    retries     INTEGER DEFAULT 0,
-    status      TEXT NOT NULL,
-    error       TEXT,
-    favorited   INTEGER DEFAULT 0
-  )
-`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_timestamp ON entries (timestamp DESC)`);
-// favorited カラムが存在しない場合は追加（旧 DB の後方互換）
-try { db.exec('ALTER TABLE entries ADD COLUMN favorited INTEGER DEFAULT 0'); } catch {}
-// favorited_images カラムが存在しない場合は追加
-try { db.exec('ALTER TABLE entries ADD COLUMN favorited_images TEXT DEFAULT NULL'); } catch {}
-
-const _stmtInsert = db.prepare(
-  `INSERT OR REPLACE INTO entries (id, prompt, params, images, input_images, timestamp, retries, status, error, favorited_images)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-);
-const _stmtFavoriteImages = db.prepare(`UPDATE entries SET favorited_images = ? WHERE id = ?`);
-const _stmtDelete  = db.prepare(`DELETE FROM entries WHERE id = ?`);
-const _stmtAll     = db.prepare(`SELECT * FROM entries ORDER BY timestamp DESC`);
-const _stmtFindIdx = db.prepare(`SELECT id FROM entries WHERE id = ?`);
-
-function _rowToEntry(row) {
-  return {
-    id:             row.id,
-    prompt:         row.prompt,
-    params:         JSON.parse(row.params),
-    images:         JSON.parse(row.images),
-    inputImages:    row.input_images ? JSON.parse(row.input_images) : undefined,
-    timestamp:      row.timestamp,
-    retries:        row.retries,
-    status:         row.status,
-    error:          row.error || undefined,
-    favoritedImages: row.favorited_images ? JSON.parse(row.favorited_images) : [],
-  };
-}
-
-function dbSaveEntry(entry) {
-  _stmtInsert.run(
-    entry.id,
-    entry.prompt,
-    JSON.stringify(entry.params || {}),
-    JSON.stringify(entry.images || []),
-    entry.inputImages ? JSON.stringify(entry.inputImages) : null,
-    entry.timestamp,
-    entry.retries || 0,
-    entry.status,
-    entry.error || null,
-    entry.favoritedImages?.length ? JSON.stringify(entry.favoritedImages) : null,
-  );
-}
-
-function dbDeleteEntry(id) {
-  _stmtDelete.run(id);
-}
-
-function dbLoadHistory() {
-  return _stmtAll.all().map(_rowToEntry);
-}
-
-// ---- history.json からの移行 ----
-if (fs.existsSync(HISTORY_FILE)) {
-  try {
-    const legacy = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
-    if (Array.isArray(legacy) && legacy.length > 0) {
-      const migrate = db.prepare(
-        `INSERT OR IGNORE INTO entries (id, prompt, params, images, input_images, timestamp, retries, status, error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      );
-      db.exec('BEGIN');
-      for (const e of legacy) {
-        try {
-          migrate.run(
-            e.id, e.prompt,
-            JSON.stringify(e.params || {}),
-            JSON.stringify(e.images || []),
-            e.inputImages ? JSON.stringify(e.inputImages) : null,
-            e.timestamp, e.retries || 0,
-            e.status || 'completed',
-            e.error || null,
-          );
-        } catch { /* skip invalid entries */ }
-      }
-      db.exec('COMMIT');
-      console.log(`history.json から ${legacy.length} 件を SQLite へ移行しました。`);
-      fs.renameSync(HISTORY_FILE, HISTORY_FILE + '.bak');
-    }
-  } catch (err) {
-    console.error('history.json の移行に失敗しました:', err);
-  }
-}
-
 let history = dbLoadHistory();
 
 // ---- 状態管理 ----
@@ -177,14 +71,18 @@ function generateId() {
   return crypto.randomBytes(12).toString('base64url');
 }
 
-// saveHistory は廃止。dbSaveEntry / dbDeleteEntry を直接使用する。
-
 function broadcast(message) {
   const data = JSON.stringify(message);
   for (const client of clients) {
     client.res.write(`event: update\ndata: ${data}\n\n`);
   }
 }
+
+const startGeneration = createStartGeneration({
+  MAX_RETRIES, IMAGES_DIR, isGeminiModel,
+  callGenerations, callEdits, callGemini,
+  dbSaveEntry, broadcast, pendingEntries, abortControllers, history,
+});
 
 function sendInitialState(res) {
   const data = JSON.stringify({
@@ -211,219 +109,6 @@ function parseJSON(text) {
 function jsonResponse(res, status, payload) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(payload));
-}
-
-// ---- OpenAI API 呼び出し ----
-async function apiFetch(url, options) {
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    let detail = await res.text();
-    try { detail = JSON.parse(detail).error?.message || detail; } catch {}
-    throw new Error(`API リクエスト失敗: ${res.status} ${res.statusText} - ${detail}`);
-  }
-  return res.json();
-}
-
-async function callGenerations(prompt, params, signal) {
-  const payload = {
-    model:  params.model || 'gpt-image-2',
-    prompt,
-    n:      params.n ? Number(params.n) : 1,
-    size:   params.size || '1024x1024',
-  };
-  if (params.quality)        payload.quality        = params.quality;
-  if (params.input_fidelity) payload.input_fidelity = params.input_fidelity;
-  if (params.background)     payload.background     = params.background;
-  if (params.format)         payload.format         = params.format;
-  if (params.moderation)     payload.moderation     = params.moderation;
-  if (params.style)          payload.style          = params.style;
-  if (params.output_compression !== undefined && params.output_compression !== '') {
-    const v = parseInt(params.output_compression, 10);
-    if (!Number.isNaN(v)) payload.output_compression = v;
-  }
-  return apiFetch(`${API_BASE}/generations`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
-    body: JSON.stringify(payload),
-    signal,
-  });
-}
-
-async function callEdits(prompt, params, inputImageFiles, signal) {
-  const form = new FormData();
-  form.append('model',  params.model || 'gpt-image-1.5');
-  form.append('prompt', prompt);
-  if (params.n)              form.append('n',             String(Number(params.n)));
-  if (params.size)           form.append('size',          params.size);
-  if (params.quality)        form.append('quality',       params.quality);
-  if (params.input_fidelity) form.append('input_fidelity', params.input_fidelity);
-  if (params.background)     form.append('background',    params.background);
-  if (params.format)         form.append('output_format', params.format);
-  if (params.moderation)     form.append('moderation',    params.moderation);
-  if (params.output_compression !== undefined && params.output_compression !== '') {
-    const v = parseInt(params.output_compression, 10);
-    if (!Number.isNaN(v)) form.append('output_compression', String(v));
-  }
-  for (const img of inputImageFiles) {
-    form.append('image[]', new Blob([img.buffer], { type: img.mimeType }), img.filename);
-  }
-  return apiFetch(`${API_BASE}/edits`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${API_KEY}` },
-    body: form,
-    signal,
-  });
-}
-
-// ---- Gemini API 呼び出し ----
-async function callGemini(prompt, params, inputImageFiles, signal) {
-  if (!NANO_BANANA_API_KEY) {
-    throw new Error('NANO_BANANA_API_KEY が設定されていません');
-  }
-  const model = params.model;
-  const n     = Math.max(1, Number(params.n) || 1);
-
-  const parts = [{ text: prompt }];
-  for (const img of inputImageFiles) {
-    parts.push({
-      inlineData: {
-        mimeType: img.mimeType,
-        data:     img.buffer.toString('base64'),
-      },
-    });
-  }
-
-  const modalities = params.gemini_output_format === 'IMAGE_AND_TEXT' ? ['TEXT', 'IMAGE'] : ['IMAGE'];
-  const generationConfig = { responseModalities: modalities };
-  const aspectRatio  = params.gemini_aspect_ratio;
-  const imageSize    = params.gemini_image_size;
-  const useImageSize = imageSize && model !== 'gemini-2.5-flash-image';
-  if (aspectRatio || useImageSize) {
-    generationConfig.imageConfig = {};
-    if (aspectRatio)    generationConfig.imageConfig.aspectRatio = aspectRatio;
-    if (useImageSize)   generationConfig.imageConfig.imageSize   = imageSize;
-  }
-  if (params.gemini_temperature !== undefined && params.gemini_temperature !== null) {
-    generationConfig.temperature = Number(params.gemini_temperature);
-  }
-  if (params.gemini_top_p !== undefined && params.gemini_top_p !== null) {
-    generationConfig.topP = Number(params.gemini_top_p);
-  }
-  if (params.gemini_thinking_level) {
-    generationConfig.thinkingConfig = { thinkingLevel: params.gemini_thinking_level };
-  }
-
-  const supportsImageSearch = model === 'gemini-3.1-flash-image-preview';
-  const useWebSearch   = !!params.gemini_grounding_web;
-  const useImageSearch = !!params.gemini_grounding_image && supportsImageSearch;
-  const tools = [];
-  if (useWebSearch || useImageSearch) {
-    if (useWebSearch && !useImageSearch) {
-      tools.push({ googleSearch: {} });
-    } else {
-      const searchTypes = {};
-      if (useWebSearch)   searchTypes.webSearch   = {};
-      if (useImageSearch) searchTypes.imageSearch = {};
-      tools.push({ googleSearch: { searchTypes } });
-    }
-  }
-
-  const body = { contents: [{ parts }], generationConfig };
-  if (tools.length > 0) body.tools = tools;
-  const url  = `${GEMINI_API_BASE}/models/${model}:generateContent`;
-
-  const makeRequest = () => apiFetch(url, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': NANO_BANANA_API_KEY },
-    body:    JSON.stringify(body),
-    signal,
-  });
-
-  const results = await Promise.all(Array.from({ length: n }, makeRequest));
-
-  const data = [];
-  const textReasons = [];
-  for (const res of results) {
-    const candidate = res?.candidates?.[0];
-    const finishReason = candidate?.finishReason;
-    for (const part of (candidate?.content?.parts || [])) {
-      if (!part.thought && part.inlineData?.data) {
-        data.push({ b64_json: part.inlineData.data, mime_type: part.inlineData.mimeType || 'image/png' });
-      } else if (part.text) {
-        textReasons.push(part.text.trim());
-      }
-    }
-    if (data.length === 0 && finishReason && finishReason !== 'STOP') {
-      textReasons.push(`finishReason: ${finishReason}`);
-    }
-  }
-
-  if (data.length === 0) {
-    const reason = textReasons.filter(Boolean).join(' / ') || '画像が生成されませんでした（モデレーションによりブロックされた可能性があります）';
-    throw new Error(reason);
-  }
-
-  return { data };
-}
-
-// ---- 画像生成（リトライ付き） ----
-function startGeneration(id, entry, prompt, params, inputImageFiles) {
-  let attempt = 0;
-
-  async function tryGenerate() {
-    if (!pendingEntries.has(id)) return;
-    try {
-      attempt++;
-      const ac = new AbortController();
-      abortControllers.set(id, ac);
-
-      const response = isGeminiModel(params?.model)
-        ? await callGemini(prompt, params, inputImageFiles, ac.signal)
-        : inputImageFiles.length
-          ? await callEdits(prompt, params, inputImageFiles, ac.signal)
-          : await callGenerations(prompt, params, ac.signal);
-
-      abortControllers.delete(id);
-      if (!pendingEntries.has(id)) return;
-
-      const fmt = params?.format === 'jpeg' ? 'jpeg' : params?.format === 'webp' ? 'webp' : 'png';
-      entry.images = (response?.data || []).map((item, idx) => {
-        if (item.url) return item.url;
-        const itemFmt = item.mime_type === 'image/jpeg' ? 'jpeg' : item.mime_type === 'image/webp' ? 'webp' : fmt;
-        const filename = `${entry.id}-${idx}.${itemFmt}`;
-        fs.writeFileSync(path.join(IMAGES_DIR, filename), Buffer.from(item.b64_json, 'base64'));
-        return `/images/${filename}`;
-      });
-      entry.status = 'completed';
-      entry.error  = undefined;
-      history.unshift(entry);
-      dbSaveEntry(entry);
-      pendingEntries.delete(id);
-      broadcast({ type: 'completed', entry });
-    } catch (err) {
-      abortControllers.delete(id);
-      if (err.name === 'AbortError') return;
-      console.error('生成エラー:', err.message);
-      entry.error = err.message;
-
-      if (attempt < MAX_RETRIES) {
-        if (!pendingEntries.has(id)) return;
-        entry.retries = attempt;
-        entry.status  = 'retrying';
-        broadcast({ type: 'retry', id: entry.id, retries: entry.retries, error: entry.error });
-        tryGenerate();
-      } else {
-        entry.retries = attempt;
-        entry.status  = 'error';
-        history.unshift(entry);
-        dbSaveEntry(entry);
-        pendingEntries.delete(id);
-        broadcast({ type: 'error', id: entry.id, error: err.message, entry });
-      }
-    }
-  }
-
-  tryGenerate();
 }
 
 // ---- ルートハンドラ ----
