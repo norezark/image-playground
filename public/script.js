@@ -219,6 +219,14 @@ async function editWithImage(imgUrl) {
 // history.js に loadParams / editWithImage コールバックを登録
 initHistory(loadParams, editWithImage);
 
+// ---- Ctrl+Enter で生成 ----
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    document.getElementById('generateForm').requestSubmit();
+  }
+});
+
 // ---- フォーム送信 ----
 document.getElementById('generateForm').addEventListener('submit', async (e) => {
   e.preventDefault();
