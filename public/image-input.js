@@ -45,6 +45,19 @@ export function addFiles(files) {
   }
 }
 
+// プロンプト入力欄への画像ペーストを入力画像として受け取る
+const promptTextarea = document.getElementById('prompt');
+promptTextarea.addEventListener('paste', (e) => {
+  const items = Array.from(e.clipboardData?.items || []);
+  const imageFiles = items
+    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+    .map(item => item.getAsFile())
+    .filter(Boolean);
+  if (imageFiles.length === 0) return;
+  e.preventDefault();
+  addFiles(imageFiles);
+});
+
 inputDropZone.addEventListener('click', (e) => {
   if (e.target !== inputFileInput && !e.target.closest('label[for="inputFileInput"]')) inputFileInput.click();
 });

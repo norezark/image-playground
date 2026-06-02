@@ -161,7 +161,7 @@ queued → (キャンセル)   → cancelled
 | `script.js` | アプリエントリポイント。SSE 購読、フォーム送信、状態管理 |
 | `api.js` | `fetch` ラッパー。`/generate`, `/cancel`, `/delete` を呼び出す |
 | `history.js` | 履歴配列を受け取りタイルを DOM に反映する |
-| `image-input.js` | ドロップゾーン・ファイル選択による入力画像の管理 |
+| `image-input.js` | ドロップゾーン・ファイル選択・クリップボードペーストによる入力画像の管理 |
 | `size-selector.js` | 向き・アスペクト比・大きさの組み合わせから `size` パラメータを計算 |
 | `price-estimate.js` | 選択中のパラメータから概算料金を計算・表示 |
 | `lightbox.js` | 画像の全画面表示・ズーム・パン・タッチ操作 |
