@@ -11,6 +11,29 @@ let _loadParams = null;
 let _editWithImage = null;
 let _showFavoritesOnly = false;
 
+const BORDER_COLOR_PALETTE = [
+  '#8eaed6',
+  '#d9b39f',
+  '#9dbfa2',
+  '#b9acd8',
+  '#cdbf95',
+  '#9fc7bf',
+  '#d1a9b8',
+  '#a6b7cf',
+];
+
+const _entryBorderColorMap = new Map();
+let _nextBorderColorIndex = 0;
+
+function getEntryBorderColor(entryId) {
+  if (_entryBorderColorMap.has(entryId)) return _entryBorderColorMap.get(entryId);
+
+  const color = BORDER_COLOR_PALETTE[_nextBorderColorIndex % BORDER_COLOR_PALETTE.length];
+  _entryBorderColorMap.set(entryId, color);
+  _nextBorderColorIndex += 1;
+  return color;
+}
+
 export function initHistory(loadParams, editWithImage) {
   _loadParams = loadParams;
   _editWithImage = editWithImage;
@@ -23,15 +46,15 @@ export function setFavoritesFilter(enabled) {
 export function renderHistory(entries) {
   const all = Array.from(entries.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   historyList.innerHTML = '';
-  const latestEntry = all.find(e => e.images?.length);
   for (const entry of all) {
     if (entry.images?.length) {
+      const borderColor = getEntryBorderColor(entry.id);
       entry.images.forEach(imgUrl => {
         if (_showFavoritesOnly && !entry.favoritedImages?.includes(imgUrl)) return;
-        historyList.appendChild(renderImageTile(entry, imgUrl, entry === latestEntry));
+        historyList.appendChild(renderImageTile(entry, imgUrl, borderColor));
       });
     } else {
-      if (!_showFavoritesOnly) historyList.appendChild(renderImageTile(entry, null, false));
+      if (!_showFavoritesOnly) historyList.appendChild(renderImageTile(entry, null, getEntryBorderColor(entry.id)));
     }
   }
 }
@@ -45,7 +68,7 @@ function statusLabel(entry) {
   }
 }
 
-function renderImageTile(entry, imgUrl, isLatest = false) {
+function renderImageTile(entry, imgUrl, borderColor) {
   const status    = entry.status || (entry.images?.length ? 'completed' : entry.error ? 'error' : 'queued');
   const isPending = status === 'queued' || status === 'retrying';
   const paramsText = Object.entries(entry.params || {})
@@ -112,8 +135,11 @@ function renderImageTile(entry, imgUrl, isLatest = false) {
     ]),
   ]);
 
-  return el('div', {
-    class: `history-item${isPending ? ' is-pending' : ''}${isLatest ? ' is-latest' : ''}`,
+  const tile = el('div', {
+    class: `history-item${isPending ? ' is-pending' : ''}`,
     id: `entry-${entry.id}-${imgUrl ?? 'placeholder'}`,
   }, [tileImage, tileFooter]);
+
+  tile.style.setProperty('--entry-border-color', borderColor);
+  return tile;
 }

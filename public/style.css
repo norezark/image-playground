@@ -448,7 +448,8 @@ button[type="submit"]:hover {
 
 .history-item {
   background: var(--bg-surface);
-  border: 1px solid var(--border);
+  --entry-border-color: var(--border);
+  border: 2px solid var(--entry-border-color);
   border-radius: 8px;
   overflow: hidden;
   display: flex;
@@ -457,12 +458,7 @@ button[type="submit"]:hover {
 }
 
 .history-item.is-pending {
-  border-left: 3px solid var(--accent);
-}
-
-.history-item.is-latest {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
+  border-left-width: 3px;
 }
 
 .tile-image {
@@ -623,7 +619,7 @@ button[type="submit"]:hover {
 
 /* Pending state indicator */
 .history-item.is-pending {
-  border-left: 3px solid var(--accent);
+  border-left-width: 3px;
 }
 
 .pending-placeholder {
