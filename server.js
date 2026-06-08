@@ -120,10 +120,20 @@ async function handleEvents(req, res) {
   });
   res.write('retry: 2000\n\n');
   sendInitialState(res);
+  const sendClock = () => {
+    const data = JSON.stringify({ iso: new Date().toISOString() });
+    res.write(`event: clock\ndata: ${data}\n\n`);
+  };
+  sendClock();
   const client    = { res };
   const heartbeat = setInterval(() => res.write('event: heartbeat\ndata: {}\n\n'), 10000);
+  const clockTick = setInterval(sendClock, 1000);
   clients.add(client);
-  req.on('close', () => { clearInterval(heartbeat); clients.delete(client); });
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    clearInterval(clockTick);
+    clients.delete(client);
+  });
 }
 
 async function handleHistory(_req, res) {

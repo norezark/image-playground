@@ -296,10 +296,21 @@ document.getElementById('generateForm').addEventListener('submit', async (e) => 
 
 // ---- 同期ステータス ----
 const syncStatusEl = document.getElementById('syncStatus');
+const syncClockEl  = document.getElementById('syncClock');
 function setSyncStatus(state) {
   const labels = { connecting: '接続中…', online: '同期中', offline: '切断' };
   syncStatusEl.textContent = labels[state] ?? state;
   syncStatusEl.className   = `sync-status sync-${state}`;
+}
+
+function setSyncClock(isoString) {
+  if (!syncClockEl) return;
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) {
+    syncClockEl.textContent = '--:--:--';
+    return;
+  }
+  syncClockEl.textContent = date.toLocaleTimeString('ja-JP', { hour12: false });
 }
 
 // ---- SSE サブスクライブ ----
@@ -324,6 +335,7 @@ function subscribe() {
   clearTimeout(_heartbeatTimer);
 
   setSyncStatus('connecting');
+  setSyncClock(undefined);
   const evtSource = new EventSource('/events');
   _evtSource = evtSource;
 
@@ -348,6 +360,16 @@ function subscribe() {
   });
 
   evtSource.addEventListener('heartbeat', resetHeartbeatTimer);
+
+  evtSource.addEventListener('clock', (ev) => {
+    resetHeartbeatTimer();
+    try {
+      const msg = JSON.parse(ev.data || '{}');
+      setSyncClock(msg.iso);
+    } catch (err) {
+      console.error('clock メッセージの解析失敗', err);
+    }
+  });
 
   evtSource.onerror = () => {
     clearTimeout(_heartbeatTimer);

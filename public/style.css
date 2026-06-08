@@ -43,6 +43,14 @@ body {
   white-space: nowrap;
 }
 
+.sync-clock {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
 .sync-connecting {
   color: var(--text-muted);
   border-color: var(--border);
