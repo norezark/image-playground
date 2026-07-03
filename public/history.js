@@ -24,6 +24,33 @@ const BORDER_COLOR_PALETTE = [
 
 const _entryBorderColorMap = new Map();
 let _nextBorderColorIndex = 0;
+let _renderedTiles = new Map();
+const _lazyImageObserver = ('IntersectionObserver' in window)
+  ? new IntersectionObserver((entries, observer) => {
+      for (const observed of entries) {
+        if (!observed.isIntersecting) continue;
+        const img = observed.target;
+        const src = img.dataset.src;
+        if (src && img.src !== src) img.src = src;
+        img.classList.remove('is-lazy');
+        observer.unobserve(img);
+      }
+    }, {
+      root: null,
+      rootMargin: '220px 0px',
+      threshold: 0.01,
+    })
+  : null;
+
+function observeLazyImage(img) {
+  if (_lazyImageObserver) {
+    _lazyImageObserver.observe(img);
+    return;
+  }
+  // Fallback for very old browsers: load immediately.
+  img.src = img.dataset.src;
+  img.classList.remove('is-lazy');
+}
 
 function getEntryBorderColor(entryId) {
   if (_entryBorderColorMap.has(entryId)) return _entryBorderColorMap.get(entryId);
@@ -43,20 +70,76 @@ export function setFavoritesFilter(enabled) {
   _showFavoritesOnly = enabled;
 }
 
-export function renderHistory(entries) {
+function buildTileSignature(entry, imgUrl, borderColor) {
+  return JSON.stringify({
+    id: entry.id,
+    imgUrl: imgUrl ?? null,
+    prompt: entry.prompt,
+    timestamp: entry.timestamp ?? null,
+    status: entry.status ?? null,
+    retries: entry.retries ?? 0,
+    error: entry.error ?? null,
+    params: entry.params ?? {},
+    inputImages: entry.inputImages ?? [],
+    favoritedImages: entry.favoritedImages ?? [],
+    borderColor,
+  });
+}
+
+function getTileKey(entryId, imgUrl) {
+  return `entry-${entryId}-${imgUrl ?? 'placeholder'}`;
+}
+
+// changedIds が渡された場合、そこに含まれないエントリはシグネチャ再計算（JSON.stringify）を
+// スキップして既存タイルをそのまま再利用する。SSE イベントの都度、履歴全件分の
+// シグネチャを再計算すると件数が多いときに負荷が高くなるための最適化。
+export function renderHistory(entries, changedIds) {
   const all = Array.from(entries.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  historyList.innerHTML = '';
+  const nextRenderedTiles = new Map();
+  let cursor = historyList.firstChild;
+
+  const placeTile = (entry, imgUrl, borderColor) => {
+    const key = getTileKey(entry.id, imgUrl);
+    const prevCached = _renderedTiles.get(key);
+    let node;
+
+    if (changedIds && !changedIds.has(entry.id) && prevCached) {
+      node = prevCached.node;
+      nextRenderedTiles.set(key, prevCached);
+    } else {
+      const signature = buildTileSignature(entry, imgUrl, borderColor);
+      node = prevCached && prevCached.signature === signature
+        ? prevCached.node
+        : renderImageTile(entry, imgUrl, borderColor);
+      nextRenderedTiles.set(key, { signature, node });
+    }
+
+    if (node === cursor) {
+      cursor = cursor.nextSibling;
+      return;
+    }
+    historyList.insertBefore(node, cursor);
+  };
+
   for (const entry of all) {
     if (entry.images?.length) {
       const borderColor = getEntryBorderColor(entry.id);
       entry.images.forEach(imgUrl => {
         if (_showFavoritesOnly && !entry.favoritedImages?.includes(imgUrl)) return;
-        historyList.appendChild(renderImageTile(entry, imgUrl, borderColor));
+        placeTile(entry, imgUrl, borderColor);
       });
     } else {
-      if (!_showFavoritesOnly) historyList.appendChild(renderImageTile(entry, null, getEntryBorderColor(entry.id)));
+      if (!_showFavoritesOnly) placeTile(entry, null, getEntryBorderColor(entry.id));
     }
   }
+
+  while (cursor) {
+    const next = cursor.nextSibling;
+    historyList.removeChild(cursor);
+    cursor = next;
+  }
+
+  _renderedTiles = nextRenderedTiles;
 }
 
 function statusLabel(entry) {
@@ -79,7 +162,16 @@ function renderImageTile(entry, imgUrl, borderColor) {
   // 画像エリア
   const tileImage = el('div', { class: 'tile-image' });
   if (imgUrl) {
-    tileImage.appendChild(el('img', { src: imgUrl, onclick: () => openLightbox(imgUrl) }));
+    const historyImg = el('img', {
+      class: 'is-lazy',
+      src: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==',
+      loading: 'lazy',
+      decoding: 'async',
+      onclick: () => openLightbox(imgUrl),
+    });
+    historyImg.dataset.src = imgUrl;
+    observeLazyImage(historyImg);
+    tileImage.appendChild(historyImg);
     tileImage.style.cursor = 'zoom-in';
     const isFav = !!entry.favoritedImages?.includes(imgUrl);
     const favBtn = el('button', {
@@ -137,7 +229,7 @@ function renderImageTile(entry, imgUrl, borderColor) {
 
   const tile = el('div', {
     class: `history-item${isPending ? ' is-pending' : ''}`,
-    id: `entry-${entry.id}-${imgUrl ?? 'placeholder'}`,
+    id: getTileKey(entry.id, imgUrl),
   }, [tileImage, tileFooter]);
 
   tile.style.setProperty('--entry-border-color', borderColor);

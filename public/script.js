@@ -381,20 +381,25 @@ function subscribe() {
 }
 
 function handleUpdate(message) {
+  const changedIds = new Set();
   switch (message.type) {
     case 'queued':
       entries.set(message.entry.id, message.entry);
+      changedIds.add(message.entry.id);
       break;
     case 'retry': {
       const entry = entries.get(message.id);
       if (entry) { entry.retries = message.retries; entry.error = message.error; entry.status = 'retrying'; }
+      changedIds.add(message.id);
       break;
     }
     case 'completed':
       entries.set(message.entry.id, message.entry);
+      changedIds.add(message.entry.id);
       break;
     case 'cancelled':
       entries.delete(message.id);
+      changedIds.add(message.id);
       break;
     case 'error':
       if (message.entry) {
@@ -403,9 +408,11 @@ function handleUpdate(message) {
         const entry = entries.get(message.id);
         if (entry) { entry.error = message.error; entry.status = 'error'; }
       }
+      changedIds.add(message.id ?? message.entry?.id);
       break;
     case 'deleted':
       entries.delete(message.id);
+      changedIds.add(message.id);
       break;
     case 'favorited': {
       const entry = entries.get(message.id);
@@ -417,12 +424,13 @@ function handleUpdate(message) {
           entry.favoritedImages = entry.favoritedImages.filter(u => u !== message.imgUrl);
         }
       }
+      changedIds.add(message.id);
       break;
     }
     default:
       console.warn('不明なメッセージタイプ', message);
   }
-  renderHistory(entries);
+  renderHistory(entries, changedIds);
 }
 
 // ---- 初期化 ----
