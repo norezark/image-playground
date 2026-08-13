@@ -223,7 +223,7 @@ function renderImageTile(entry, imgUrl, borderColor) {
     el('div', { class: 'tile-actions' }, [
       actionBtn,
       el('button', { class: 'load-button', text: 'Load', onclick: () => _loadParams?.(entry) }),
-      ...(imgUrl ? [el('button', { class: 'edit-button', text: 'Edit', onclick: () => _editWithImage?.(imgUrl) })] : []),
+      ...(imgUrl ? [el('button', { class: 'edit-button', text: 'Edit', onclick: () => _editWithImage?.(imgUrl, entry) })] : []),
     ]),
   ]);
 

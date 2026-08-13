@@ -121,9 +121,12 @@ fitToggle.querySelectorAll('.fit-btn').forEach(btn => {
 
 
 // ---- パラメータの復元 ----
-async function loadParams(entry) {
-  document.getElementById('prompt').value = entry.prompt;
-  autoGrowPrompt();
+// includePrompt=false の場合、prompt 欄は変更しない（Edit ボタンから呼び出す場合に使用）
+function applyEntryParams(entry, { includePrompt = true } = {}) {
+  if (includePrompt) {
+    document.getElementById('prompt').value = entry.prompt;
+    autoGrowPrompt();
+  }
   document.getElementById('model').value  = entry.params.model || 'gpt-image-2';
   document.getElementById('n').value      = entry.params.n || 1;
 
@@ -175,45 +178,37 @@ async function loadParams(entry) {
   document.getElementById('gemini_grounding_web').checked      = !!entry.params.gemini_grounding_web;
   document.getElementById('gemini_grounding_image').checked    = !!entry.params.gemini_grounding_image;
   updateModelSpecificUI();
+}
 
+async function loadInputImagesFromUrls(imgUrls) {
   clearInputImages();
-  if (Array.isArray(entry.inputImages) && entry.inputImages.length > 0) {
-    await Promise.all(entry.inputImages.map(async (imgUrl) => {
-      try {
-        const res     = await fetch(imgUrl);
-        const blob    = await res.blob();
-        const dataUrl = await new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onload = (e) => resolve(e.target.result);
-          reader.readAsDataURL(blob);
-        });
-        addInputImage({ dataUrl, mimeType: blob.type, name: imgUrl.split('/').pop() });
-      } catch (e) {
-        console.warn('入力画像の再読み込み失敗', imgUrl, e);
-      }
-    }));
-  }
+  await Promise.all(imgUrls.map(async (imgUrl) => {
+    try {
+      const res     = await fetch(imgUrl);
+      const blob    = await res.blob();
+      const dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.readAsDataURL(blob);
+      });
+      addInputImage({ dataUrl, mimeType: blob.type, name: imgUrl.split('/').pop() });
+    } catch (e) {
+      console.warn('入力画像の再読み込み失敗', imgUrl, e);
+    }
+  }));
   renderInputThumbnails();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// ---- 生成結果画像を入力として編集開始 ----
-async function editWithImage(imgUrl) {
-  clearInputImages();
-  try {
-    const res     = await fetch(imgUrl);
-    const blob    = await res.blob();
-    const dataUrl = await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target.result);
-      reader.readAsDataURL(blob);
-    });
-    addInputImage({ dataUrl, mimeType: blob.type, name: imgUrl.split('/').pop() });
-  } catch (e) {
-    console.warn('画像の読み込み失敗', imgUrl, e);
-  }
-  renderInputThumbnails();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+async function loadParams(entry) {
+  applyEntryParams(entry, { includePrompt: true });
+  await loadInputImagesFromUrls(Array.isArray(entry.inputImages) ? entry.inputImages : []);
+}
+
+// ---- 生成結果画像を入力として編集開始（prompt 以外のパラメータも Load する）----
+async function editWithImage(imgUrl, entry) {
+  if (entry) applyEntryParams(entry, { includePrompt: false });
+  await loadInputImagesFromUrls([imgUrl]);
 }
 
 // history.js に loadParams / editWithImage コールバックを登録
