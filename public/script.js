@@ -4,6 +4,7 @@ import { inputImages, renderInputThumbnails, clearInputImages, addInputImage } f
 import { computeResolution, computeGeminiAspectRatio, sizeToSelects, setVisualGroup, updateSizeSelectors } from './size-selector.js';
 import { updatePriceEstimate } from './price-estimate.js';
 import { renderHistory, initHistory, setFavoritesFilter } from './history.js';
+import { initParamsPopup } from './params-popup.js';
 import { postJSON } from './api.js';
 // lightbox は history.js 経由で自動初期化される
 
@@ -213,6 +214,15 @@ async function editWithImage(imgUrl, entry) {
 
 // history.js に loadParams / editWithImage コールバックを登録
 initHistory(loadParams, editWithImage);
+
+// ---- プロンプトのみロード（パラメータポップアップの「プロンプトのみロード」ボタンから呼び出し）----
+function loadPromptOnly(entry) {
+  document.getElementById('prompt').value = entry.prompt;
+  autoGrowPrompt();
+}
+
+// params-popup.js に loadPromptOnly コールバックを登録
+initParamsPopup(loadPromptOnly);
 
 // ---- Ctrl+Enter で生成 ----
 document.addEventListener('keydown', (e) => {

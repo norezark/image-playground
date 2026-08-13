@@ -41,6 +41,7 @@ image-playground/
     ├── size-selector.js   # サイズ計算・ビジュアルセレクタ
     ├── price-estimate.js  # 料金見積もり
     ├── lightbox.js        # ライトボックス（ズーム・パン・タッチ）
+    ├── params-popup.js    # 生成パラメータ一覧ポップアップ
     └── images/            # 生成画像保存先（自動生成）
         └── inputs/        # 入力画像保存先（自動生成）
 ```
@@ -167,6 +168,7 @@ queued → (キャンセル)   → cancelled
 | `size-selector.js` | 向き・アスペクト比・大きさの組み合わせから `size` パラメータを計算 |
 | `price-estimate.js` | 選択中のパラメータから概算料金を計算・表示 |
 | `lightbox.js` | 画像の全画面表示・ズーム・パン・タッチ操作 |
+| `params-popup.js` | 履歴タイルのプロンプト・パラメータ表示クリック時に、生成パラメータ一覧とプロンプト全文コピー・プロンプトのみロードのボタンを表示するポップアップ |
 | `utils.js` | `el(tag, attrs, children)` DOM 生成ヘルパー |
 
 ### `el()` ヘルパー（`utils.js`）

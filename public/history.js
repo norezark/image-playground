@@ -2,6 +2,7 @@
 
 import { el } from './utils.js';
 import { openLightbox } from './lightbox.js';
+import { openParamsPopup } from './params-popup.js';
 import { deleteEntry, cancelEntry, toggleFavorite } from './api.js';
 
 const historyList = document.getElementById('historyList');
@@ -213,10 +214,10 @@ function renderImageTile(entry, imgUrl, borderColor) {
     : [];
 
   const tileFooter = el('div', { class: 'tile-footer' }, [
-    el('div', { class: 'tile-prompt', text: entry.prompt }),
+    el('div', { class: 'tile-prompt', text: entry.prompt, title: 'クリックでパラメータ一覧を表示', onclick: () => openParamsPopup(entry) }),
     ...inputImagesRow,
     el('div', { class: 'tile-meta' }, [
-      el('span', { class: 'tile-params', text: paramsText }),
+      el('span', { class: 'tile-params', text: paramsText, title: 'クリックでパラメータ一覧を表示', onclick: () => openParamsPopup(entry) }),
       el('span', { class: 'status', text: statusLabel(entry) }),
     ]),
     ...(entry.timestamp ? [el('div', { class: 'tile-timestamp', text: new Date(entry.timestamp).toLocaleString('ja-JP') })] : []),

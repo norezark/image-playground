@@ -229,6 +229,20 @@
     <img id="lightboxImg" class="lightbox-img" src="" alt="拡大画像">
   </div>
 
+  <!-- Generation params popup -->
+  <div id="paramsPopup" class="params-popup" role="dialog" aria-modal="true" aria-label="生成パラメータ">
+    <div class="params-popup-panel">
+      <button id="paramsPopupClose" class="params-popup-close" aria-label="閉じる">&#x2715;</button>
+      <h3 class="params-popup-title">生成パラメータ</h3>
+      <div id="paramsPopupPrompt" class="params-popup-prompt"></div>
+      <div id="paramsPopupList" class="params-popup-list"></div>
+      <div class="params-popup-actions">
+        <button id="paramsPopupCopyPrompt" class="params-popup-btn" type="button">プロンプトをコピー</button>
+        <button id="paramsPopupLoadPrompt" class="params-popup-btn" type="button">プロンプトのみロード</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="script.js"></script>
 </body>
 </html>
