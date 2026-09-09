@@ -107,7 +107,7 @@ PORT=8080 MAX_RETRIES=5 node server.js
 | パラメータ | 値の例 | 説明 |
 |---|---|---|
 | **Model** | CometAPI: `gpt-image-2-all`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini` / Nano Banana: `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview` | 使用するモデル |
-| **Number of images** | 1〜8 | 1リクエストで生成する枚数（Gemini はモデル内部で複数呼び出し） |
+| **Number of images** | 1〜10 | 1リクエストで生成する枚数(Gemini はモデル内部で複数呼び出し) |
 | **Size** | 向き × アスペクト比 × 大きさ（S=1024px / M=1536px / L=2048px / XL=2880px）の組み合わせ | 出力解像度（CometAPI）またはアスペクト比（Nano Banana） |
 | **Image Size** *(Nano Banana のみ)* | `512` / `1K` / `2K` / `4K` | Gemini 画像の最大辺ピクセル数（`gemini-2.5-flash-image` は非対応） |
 | **Quality** | `low` / `medium` / `high` | 画質（CometAPI のみ） |
