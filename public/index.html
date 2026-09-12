@@ -32,6 +32,8 @@
             <select name="model" id="model">
               <optgroup label="CometAPI">
                 <option value="gpt-image-2-all">gpt-image-2-all</option>
+                <option value="gpt-image-2.5-flare">gpt-image-2.5-flare</option>
+                <option value="gpt-image-2.5-sunburst">gpt-image-2.5-sunburst</option>
                 <option value="gpt-image-2">gpt-image-2</option>
                 <option value="gpt-image-1.5">gpt-image-1.5</option>
                 <option value="gpt-image-1">gpt-image-1</option>
@@ -164,9 +166,12 @@
             Quality
             <select name="quality" id="quality">
               <option value="">Default</option>
+              <option value="auto">Auto</option>
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
+              <option value="xhigh" data-image-25-only hidden disabled>Extra high</option>
+              <option value="max" data-image-25-only hidden disabled>Max</option>
             </select>
           </label>
           <label id="inputFidelityLabel">

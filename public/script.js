@@ -34,6 +34,12 @@ function isGemini3Model(model) { return GEMINI_3_MODELS.has(model); }
 function updateModelSpecificUI() {
   const model    = document.getElementById('model').value;
   const isGemini = isGeminiModel(model);
+  const isImage25 = /^gpt-image-2\.5-(flare|sunburst)(-2026-09-08)?$/.test(model);
+  const quality = document.getElementById('quality');
+  for (const option of quality.querySelectorAll('[data-image-25-only]')) {
+    option.hidden = option.disabled = !isImage25;
+  }
+  if (!isImage25 && ['xhigh', 'max'].includes(quality.value)) quality.value = '';
   for (const id of COMET_ONLY_PARAM_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = isGemini ? 'none' : '';

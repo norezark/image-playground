@@ -24,6 +24,9 @@
 image-playground/
 ├── server.js              # HTTP サーバー・ルーティング・SSE（~260行）
 ├── server.ps1             # バックグラウンド起動管理スクリプト
+├── tests/
+│   ├── image-api.test.cjs  # Images API のリクエスト回帰テスト（外部通信なし）
+│   └── image-price.test.cjs # GPT Image 2.5 の公式料金計算例との照合
 ├── history.db             # 生成履歴（SQLite、自動生成）
 ├── server.pid             # バックグラウンド起動時の PID（自動生成）
 ├── lib/
@@ -40,6 +43,7 @@ image-playground/
     ├── image-input.js     # 入力画像管理（ドロップゾーン・ファイル選択）
     ├── size-selector.js   # サイズ計算・ビジュアルセレクタ
     ├── price-estimate.js  # 料金見積もり
+    ├── image-price.js     # GPT Image 2.5 の出力トークン・料金計算（DOM非依存）
     ├── lightbox.js        # ライトボックス（ズーム・パン・タッチ）
     ├── params-popup.js    # 生成パラメータ一覧ポップアップ
     └── images/            # 生成画像保存先（自動生成）
@@ -167,6 +171,7 @@ queued → (キャンセル)   → cancelled
 | `image-input.js` | ドロップゾーン・ファイル選択・クリップボードペーストによる入力画像の管理 |
 | `size-selector.js` | 向き・アスペクト比・大きさの組み合わせから `size` パラメータを計算 |
 | `price-estimate.js` | 選択中のパラメータから概算料金を計算・表示 |
+| `image-price.js` | GPT Image 2.5 の品質・解像度から出力トークン数と標準CometAPI料金を推定 |
 | `lightbox.js` | 画像の全画面表示・ズーム・パン・タッチ操作 |
 | `params-popup.js` | 履歴タイルのプロンプト・パラメータ表示クリック時に、生成パラメータ一覧とプロンプト全文コピー・プロンプトのみロードのボタンを表示するポップアップ |
 | `utils.js` | `el(tag, attrs, children)` DOM 生成ヘルパー |
@@ -184,6 +189,16 @@ el('div', { className: 'tile' }, [
 ```
 
 既存要素の取得（`getElementById`, `querySelector` など）はそのまま使用してよい。
+
+### GPT Image 2.5
+
+- `index.html` に `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` を登録。既存の CometAPI Images エンドポイントと API キーで生成・編集する。
+- `script.js` は `xhigh` / `max` を 2.5 選択時のみ有効化し、他モデルへの切り替え時は非対応の品質値を Default に戻す。履歴の Load でも同じ制御を適用する。
+- `lib/api.js` は 2.5 の生成リクエストに `output_format` を使用し、編集用の `input_fidelity` は生成時に送らない。編集時は従来通り multipart の `output_format` / `input_fidelity` を使用する。
+- `image-price.js` は公式計算器と同じ式を使用する。品質ごとの長辺グリッドは `low=16, medium=24, high=48, xhigh=64, max=96`。短辺グリッドは長辺グリッド÷アスペクト比を偶数丸めし、出力トークン数は `ceil(長辺グリッド × 短辺グリッド × (2,000,000 + 幅×高さ) / 4,000,000)`。CometAPI標準料金は公式 `$30/1M` × `0.8` の `$24/1M`（2026-09-09確認）。
+- `price-estimate.js` は2.5の出力料金を小数点以下5桁で表示する。枚数分の合計は丸め前の値で計算。品質 Default / Auto は Low〜Max の範囲、サイズ Auto は1024×1024の参考値と明記する。入力料金・リトライは含めない。
+- サイズ指定は既存の計算を使用する（16px 単位、最大辺 3840px、比率 1:3〜3:1、総画素数 655,360〜8,294,400）。
+- 仕様: [Image generation](https://developers.openai.com/api/docs/guides/image-generation)、[CometAPI標準料金](https://www.cometapi.com/pricing/)。API リクエスト・料金計算の回帰確認は `node --test` で実行する（外部通信なし）。
 
 ### SSE 購読と状態管理（`script.js`）
 

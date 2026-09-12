@@ -1,6 +1,7 @@
 // price-estimate.js – 料金見積もり
 
 import { computeResolution } from './size-selector.js';
+import { estimateImage25Price } from './image-price.js';
 
 const GEMINI_MODELS = new Set([
   'gemini-2.5-flash-image',
@@ -51,7 +52,7 @@ const PRICE_BASE_PIXELS_NON_SQ = 1024 * 1536;
 
 function computeEstimatedPrice() {
   const model       = document.getElementById('model').value;
-  const quality     = document.getElementById('quality').value || 'medium';
+  const quality     = document.getElementById('quality').value;
   const n           = Math.max(1, parseInt(document.getElementById('n').value, 10) || 1);
   const orientation = document.getElementById('sizeOrientation').value;
   const ratio       = document.getElementById('sizeRatio').value;
@@ -75,6 +76,14 @@ function computeEstimatedPrice() {
   }
 
   if (model === 'gpt-image-2-all') return { perImage: 0.04, n, isApprox: false };
+
+  if (/^gpt-image-2\.5-(flare|sunburst)(-2026-09-08)?$/.test(model)) {
+    const size = computeResolution(orientation, ratio, tier);
+    const estimate = size && estimateImage25Price(size, quality);
+    if (!estimate) return { n, provider: 'CometAPI', unknown: true,
+      reason: '選択したサイズ・品質では見積もりできません' };
+    return { ...estimate, n, provider: 'CometAPI', image25: true };
+  }
 
   const modelPrices = OFFICIAL_PRICE_TABLE[model];
   if (!modelPrices) return null;
@@ -106,9 +115,24 @@ function fmtUSD(usd) {
 export function updatePriceEstimate() {
   const result  = computeEstimatedPrice();
   const priceEl = document.getElementById('priceEstimate');
+  priceEl.title = '';
   if (!result) { priceEl.textContent = ''; return; }
   if (result.unknown) {
-    priceEl.textContent = `推定料金 (${result.provider}): preview モデルのため料金未確認`;
+    priceEl.textContent = `推定料金 (${result.provider}): ${result.reason || 'preview モデルのため料金未確認'}`;
+    return;
+  }
+  if (result.image25) {
+    const amount = (count) => {
+      const low = `$${(result.minPerImage * count).toFixed(5)}`;
+      const high = `$${(result.maxPerImage * count).toFixed(5)}`;
+      return low === high ? low : `${low}〜${high}`;
+    };
+    let text = `推定料金 (CometAPI): 約${amount(1)} / 枚`;
+    if (result.n > 1) text += ` × ${result.n} = 約${amount(result.n)}`;
+    text += '（出力分・入力料金別）';
+    if (result.assumptions.length) text += ` ${result.assumptions.join(' / ')}`;
+    priceEl.textContent = text;
+    priceEl.title = 'OpenAI公式計算器の出力トークン数 × $24 / 100万トークン（標準20%割引）。入力テキスト・入力画像・リトライの料金は別途かかります。実請求額は契約・使用量により異なります。';
     return;
   }
   const provider = result.provider || 'CometAPI';

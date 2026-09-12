@@ -106,16 +106,26 @@ PORT=8080 MAX_RETRIES=5 node server.js
 
 | パラメータ | 値の例 | 説明 |
 |---|---|---|
-| **Model** | CometAPI: `gpt-image-2-all`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini` / Nano Banana: `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview` | 使用するモデル |
+| **Model** | CometAPI: `gpt-image-2-all`, `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini` / Nano Banana: `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview` | 使用するモデル |
 | **Number of images** | 1〜10 | 1リクエストで生成する枚数(Gemini はモデル内部で複数呼び出し) |
 | **Size** | 向き × アスペクト比 × 大きさ（S=1024px / M=1536px / L=2048px / XL=2880px）の組み合わせ | 出力解像度（CometAPI）またはアスペクト比（Nano Banana） |
 | **Image Size** *(Nano Banana のみ)* | `512` / `1K` / `2K` / `4K` | Gemini 画像の最大辺ピクセル数（`gemini-2.5-flash-image` は非対応） |
-| **Quality** | `low` / `medium` / `high` | 画質（CometAPI のみ） |
+| **Quality** | `auto` / `low` / `medium` / `high` / `xhigh` / `max` | 画質（CometAPI のみ）。`xhigh` / `max` は GPT Image 2.5 のみ。旧モデルに切り替えると Default に戻ります |
 | **Input fidelity** | `low` / `high` | 入力画像の再現度（Edits モード・CometAPI のみ） |
 | **Background** | `opaque` | 背景設定（CometAPI のみ） |
 | **Format** | `png` / `jpeg` / `webp` | 出力ファイル形式（CometAPI のみ。Gemini は PNG 固定） |
 | **Compression** | 0〜100 | jpeg/webp 圧縮率（CometAPI のみ） |
 | **Moderation** | `auto` / `low` | モデレーション厳密度（CometAPI のみ） |
+
+GPT Image 2.5 は生成・入力画像を使った編集の両方に対応しています。
+[Flare](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare) は速度を重視した日常的な生成向け、
+[Sunburst](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst) は精密な編集向けです。
+両モデルを CometAPI の認証済みモデル一覧で確認済みです（2026-09-09）。利用可否は契約・提供状況に依存します。
+GPT Image 2.5 の推定料金は、[OpenAI公式計算器](https://developers.openai.com/api/docs/guides/image-generation#gpt-image-25-and-gpt-image-2-output-tokens)と
+[CometAPIの標準20%割引](https://www.cometapi.com/pricing/)に基づく画像出力分です（$24 / 100万出力トークン、2026-09-09確認）。
+サイズ・品質・枚数を変えると再計算します。例えば1024×1024・Mediumは約 **$0.01054 / 枚** です。
+品質が Default / Auto の場合は Low〜Max の範囲を表示し、サイズが Auto の場合は1024×1024を仮定した概算であることを明示します。
+入力テキスト・入力画像・リトライの料金は別途かかり、実請求額は契約・実際の使用量により異なります。
 
 ---
 
