@@ -26,7 +26,8 @@ image-playground/
 ├── server.ps1             # バックグラウンド起動管理スクリプト
 ├── tests/
 │   ├── image-api.test.cjs  # Images API のリクエスト回帰テスト（外部通信なし）
-│   └── image-price.test.cjs # GPT Image 2.5 の公式料金計算例との照合
+│   ├── image-price.test.cjs # GPT Image 2.5 の公式料金計算例との照合
+│   └── lazy-images.test.cjs # 画像読み込み数・スクロール時の待ち行列・キャンセルの回帰テスト
 ├── history.db             # 生成履歴（SQLite、自動生成）
 ├── server.pid             # バックグラウンド起動時の PID（自動生成）
 ├── lib/
@@ -40,6 +41,7 @@ image-playground/
     ├── utils.js           # DOM ヘルパー el()
     ├── api.js             # サーバー API 呼び出しラッパー
     ├── history.js         # 履歴タイルのレンダリング
+    ├── lazy-images.js     # 画像の先読み範囲・同時読み込み数・キャンセルの管理
     ├── image-input.js     # 入力画像管理（ドロップゾーン・ファイル選択）
     ├── size-selector.js   # サイズ計算・ビジュアルセレクタ
     ├── price-estimate.js  # 料金見積もり
@@ -168,6 +170,7 @@ queued → (キャンセル)   → cancelled
 | `script.js` | アプリエントリポイント。SSE 購読、フォーム送信、状態管理 |
 | `api.js` | `fetch` ラッパー。`/generate`, `/cancel`, `/delete` を呼び出す |
 | `history.js` | 履歴配列を受け取りタイルを DOM に反映する |
+| `lazy-images.js` | 生成画像と入力画像の先読み、同時読み込み数、取り外した画像のキャンセルを管理する |
 | `image-input.js` | ドロップゾーン・ファイル選択・クリップボードペーストによる入力画像の管理 |
 | `size-selector.js` | 向き・アスペクト比・大きさの組み合わせから `size` パラメータを計算 |
 | `price-estimate.js` | 選択中のパラメータから概算料金を計算・表示 |
@@ -189,6 +192,18 @@ el('div', { className: 'tile' }, [
 ```
 
 既存要素の取得（`getElementById`, `querySelector` など）はそのまま使用してよい。
+
+### 履歴画像の遅延読み込み（`history.js` / `lazy-images.js`）
+
+- 履歴タイルは全件を DOM に保持し、連続してスクロールできる構成を維持する。
+- 生成画像とカード内の入力画像は、共通の `createLazyImageLoader()` で管理する。元画像の URL を `data-src` に保持し、`IntersectionObserver` で画面の前後500px以内に入った画像を待ち行列に追加する。縮小画像は作成しない。
+- 読み込みから `decode()` 完了までを同時に2枚までに制限する。待ち行列の開始は `requestAnimationFrame` にまとめ、スクロールで先読み範囲を通り過ぎた未開始の画像は待ち行列から外す。30秒でタイムアウトした画像はリクエストを止め、後続画像の処理を続ける。
+- 読み込んだ画像は監視を解除し、画面外へ戻っても保持する。スクロールで戻った際に画像を読み直す処理は行わない。
+- 削除・差し替え・お気に入りフィルターで取り除いたタイルは、画像の監視・待ち行列を解除し、読み込み中ならキャンセルする。失敗した画像が後続の読み込みを止めることはない。
+- 画像には `decoding="async"` を指定する。読み込み開始時は `loading="eager"` に切り替え、ブラウザ側の遅延判定によって先読みが止まらないようにする。`IntersectionObserver` がない旧ブラウザでも、2枚ずつ読み込む制限は維持する。
+- カードには `contain: layout style paint` を指定し、カード内のレイアウト・描画を隔離する。`content-visibility: auto` は使用しない。Android Chromeがキーボード表示前に前後の入力候補を探索すると、描画を省略したカードごとに強制レイアウトが発生するため。カードのレイアウトは初期表示時に計算し、画像の取得は上記の `IntersectionObserver` で別に制御する。
+- 2026-09-13にPixel 10 / Android 17 / Chrome 152でUSBトレースを比較。再読み込み後の初回フォーカスを含むメインスレッド処理は3,702msから159ms、同処理中のレイアウトは1,631回から0回に減少。修正後の3回は159 / 181 / 147msで、実機操作でも入力・スクロールの改善を確認した。これらはChromeの処理時間であり、キーボードの表示アニメーション全体の所要時間ではない。
+- 未読み込み画像の背景は静止表示にして、スクロール中のアニメーション描画を減らす。
 
 ### GPT Image 2.5
 

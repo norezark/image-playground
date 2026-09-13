@@ -1,6 +1,7 @@
 // history.js – 生成履歴のレンダリング
 
 import { el } from './utils.js';
+import { createLazyImageLoader } from './lazy-images.js';
 import { openLightbox } from './lightbox.js';
 import { openParamsPopup } from './params-popup.js';
 import { deleteEntry, cancelEntry, toggleFavorite } from './api.js';
@@ -26,32 +27,7 @@ const BORDER_COLOR_PALETTE = [
 const _entryBorderColorMap = new Map();
 let _nextBorderColorIndex = 0;
 let _renderedTiles = new Map();
-const _lazyImageObserver = ('IntersectionObserver' in window)
-  ? new IntersectionObserver((entries, observer) => {
-      for (const observed of entries) {
-        if (!observed.isIntersecting) continue;
-        const img = observed.target;
-        const src = img.dataset.src;
-        if (src && img.src !== src) img.src = src;
-        img.classList.remove('is-lazy');
-        observer.unobserve(img);
-      }
-    }, {
-      root: null,
-      rootMargin: '220px 0px',
-      threshold: 0.01,
-    })
-  : null;
-
-function observeLazyImage(img) {
-  if (_lazyImageObserver) {
-    _lazyImageObserver.observe(img);
-    return;
-  }
-  // Fallback for very old browsers: load immediately.
-  img.src = img.dataset.src;
-  img.classList.remove('is-lazy');
-}
+const lazyImages = createLazyImageLoader();
 
 function getEntryBorderColor(entryId) {
   if (_entryBorderColorMap.has(entryId)) return _entryBorderColorMap.get(entryId);
@@ -136,6 +112,8 @@ export function renderHistory(entries, changedIds) {
 
   while (cursor) {
     const next = cursor.nextSibling;
+    // 画面外のまま削除・差し替えされた画像を observer に残さない。
+    for (const img of cursor.querySelectorAll('img[data-src]')) lazyImages.release(img);
     historyList.removeChild(cursor);
     cursor = next;
   }
@@ -163,15 +141,9 @@ function renderImageTile(entry, imgUrl, borderColor) {
   // 画像エリア
   const tileImage = el('div', { class: 'tile-image' });
   if (imgUrl) {
-    const historyImg = el('img', {
-      class: 'is-lazy',
-      src: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==',
-      loading: 'lazy',
-      decoding: 'async',
+    const historyImg = lazyImages.create(imgUrl, {
       onclick: () => openLightbox(imgUrl),
     });
-    historyImg.dataset.src = imgUrl;
-    observeLazyImage(historyImg);
     tileImage.appendChild(historyImg);
     tileImage.style.cursor = 'zoom-in';
     const isFav = !!entry.favoritedImages?.includes(imgUrl);
@@ -210,7 +182,7 @@ function renderImageTile(entry, imgUrl, borderColor) {
 
   const inputImagesRow = Array.isArray(entry.inputImages) && entry.inputImages.length
     ? [el('div', { class: 'tile-input-images' },
-        entry.inputImages.map(u => el('img', { class: 'tile-input-thumb', src: u, title: 'Input image' })))]
+        entry.inputImages.map(u => lazyImages.create(u, { class: 'tile-input-thumb', title: 'Input image' })))]
     : [];
 
   const tileFooter = el('div', { class: 'tile-footer' }, [
