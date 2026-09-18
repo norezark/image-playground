@@ -2,6 +2,7 @@
 
 import { computeResolution } from './size-selector.js';
 import { estimateImage25Price } from './image-price.js';
+import { parseModelSelection, PROVIDER_LABELS } from './model-selection.js';
 
 const GEMINI_MODELS = new Set([
   'gemini-2.5-flash-image',
@@ -51,7 +52,10 @@ const PRICE_BASE_PIXELS_SQUARE = 1024 * 1024;
 const PRICE_BASE_PIXELS_NON_SQ = 1024 * 1536;
 
 function computeEstimatedPrice() {
-  const model       = document.getElementById('model').value;
+  const selection = parseModelSelection(document.getElementById('model').value);
+  const { model } = selection;
+  const provider = PROVIDER_LABELS[selection.provider];
+  const discount = selection.provider === 'openai' ? 1 : COMETAPI_DISCOUNT;
   const quality     = document.getElementById('quality').value;
   const n           = Math.max(1, parseInt(document.getElementById('n').value, 10) || 1);
   const orientation = document.getElementById('sizeOrientation').value;
@@ -75,14 +79,14 @@ function computeEstimatedPrice() {
     return { perImage: null, n, provider: 'Gemini API', unknown: true };
   }
 
-  if (model === 'gpt-image-2-all') return { perImage: 0.04, n, isApprox: false };
+  if (model === 'gpt-image-2-all') return { perImage: 0.04, n, provider, isApprox: false };
 
   if (/^gpt-image-2\.5-(flare|sunburst)(-2026-09-08)?$/.test(model)) {
-    const size = computeResolution(orientation, ratio, tier);
-    const estimate = size && estimateImage25Price(size, quality);
-    if (!estimate) return { n, provider: 'CometAPI', unknown: true,
+    const size = computeResolution(orientation, ratio, tier, selection);
+    const estimate = size && estimateImage25Price(size, quality, selection.provider);
+    if (!estimate) return { n, provider, unknown: true,
       reason: '選択したサイズ・品質では見積もりできません' };
-    return { ...estimate, n, provider: 'CometAPI', image25: true };
+    return { ...estimate, n, provider, image25: true, outputRate: 30 * discount };
   }
 
   const modelPrices = OFFICIAL_PRICE_TABLE[model];
@@ -91,18 +95,18 @@ function computeEstimatedPrice() {
   const qualityKey = ['low', 'medium', 'high'].includes(quality) ? quality : 'medium';
   const qualityRow = modelPrices[qualityKey];
   const isSquare   = orientation === 'square' || orientation === 'auto';
-  const basePrice  = COMETAPI_DISCOUNT * (isSquare ? qualityRow.square : qualityRow.nonSquare);
+  const basePrice  = discount * (isSquare ? qualityRow.square : qualityRow.nonSquare);
   const basePixels = isSquare ? PRICE_BASE_PIXELS_SQUARE : PRICE_BASE_PIXELS_NON_SQ;
 
   let scale = 1;
   if (orientation !== 'auto') {
-    const res = computeResolution(orientation, ratio, tier);
+    const res = computeResolution(orientation, ratio, tier, selection);
     if (res && res !== 'auto') {
       const [w, h] = res.split('x').map(Number);
       scale = (w * h) / basePixels;
     }
   }
-  return { perImage: basePrice * scale, n, isApprox: true };
+  return { perImage: basePrice * scale, n, provider, isApprox: true };
 }
 
 function fmtUSD(usd) {
@@ -127,12 +131,12 @@ export function updatePriceEstimate() {
       const high = `$${(result.maxPerImage * count).toFixed(5)}`;
       return low === high ? low : `${low}〜${high}`;
     };
-    let text = `推定料金 (CometAPI): 約${amount(1)} / 枚`;
+    let text = `推定料金 (${result.provider}): 約${amount(1)} / 枚`;
     if (result.n > 1) text += ` × ${result.n} = 約${amount(result.n)}`;
     text += '（出力分・入力料金別）';
     if (result.assumptions.length) text += ` ${result.assumptions.join(' / ')}`;
     priceEl.textContent = text;
-    priceEl.title = 'OpenAI公式計算器の出力トークン数 × $24 / 100万トークン（標準20%割引）。入力テキスト・入力画像・リトライの料金は別途かかります。実請求額は契約・使用量により異なります。';
+    priceEl.title = `OpenAI公式計算器の出力トークン数 × $${result.outputRate} / 100万トークン${result.outputRate === 24 ? '（CometAPI標準20%割引）' : '（OpenAI公式）'}。入力テキスト・入力画像・リトライの料金は別途かかります。実請求額は契約・使用量により異なります。`;
     return;
   }
   const provider = result.provider || 'CometAPI';

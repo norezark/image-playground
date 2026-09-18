@@ -6,11 +6,29 @@ import { updatePriceEstimate } from './price-estimate.js';
 import { renderHistory, initHistory, setFavoritesFilter } from './history.js';
 import { initParamsPopup } from './params-popup.js';
 import { postJSON } from './api.js';
+import { parseModelSelection, modelSelectionValue, PROVIDER_LABELS } from './model-selection.js';
 // lightbox は history.js 経由で自動初期化される
 
 // ---- 共有状態 ----
 // 生成エントリのマップ。キーは ID、値は { id, prompt, params, images, inputImages, timestamp, retries, status, error }
 const entries = new Map();
+let providerAvailability = null;
+const modelSelect = document.getElementById('model');
+const savedModel = localStorage.getItem('image-model-selection');
+if (savedModel && Array.from(modelSelect.options).some(option => option.value === savedModel)) {
+  modelSelect.value = savedModel;
+}
+
+function updateProviderStatus() {
+  const { provider } = parseModelSelection(modelSelect.value);
+  const status = document.getElementById('providerStatus');
+  const available = providerAvailability?.[provider] === true;
+  status.hidden = available;
+  status.textContent = providerAvailability
+    ? `${PROVIDER_LABELS[provider]} のAPIキーが未設定です。キーの設定とサーバーの再起動が必要です。`
+    : '接続先の設定を確認中…（表示が続く場合はサーバーを再起動してください）';
+  document.getElementById('generateButton').disabled = !available;
+}
 
 // ---- Gemini モデル判定 ----
 const GEMINI_MODELS = new Set([
@@ -20,7 +38,7 @@ const GEMINI_MODELS = new Set([
 ]);
 function isGeminiModel(model) { return GEMINI_MODELS.has(model); }
 
-const COMET_ONLY_PARAM_IDS = [
+const IMAGE_API_PARAM_IDS = [
   'qualityLabel', 'inputFidelityLabel', 'backgroundLabel',
   'formatLabel', 'compressionLabel', 'moderationLabel',
 ];
@@ -32,7 +50,7 @@ const GEMINI_3_MODELS = new Set([
 function isGemini3Model(model) { return GEMINI_3_MODELS.has(model); }
 
 function updateModelSpecificUI() {
-  const model    = document.getElementById('model').value;
+  const { model } = parseModelSelection(modelSelect.value);
   const isGemini = isGeminiModel(model);
   const isImage25 = /^gpt-image-2\.5-(flare|sunburst)(-2026-09-08)?$/.test(model);
   const quality = document.getElementById('quality');
@@ -40,7 +58,7 @@ function updateModelSpecificUI() {
     option.hidden = option.disabled = !isImage25;
   }
   if (!isImage25 && ['xhigh', 'max'].includes(quality.value)) quality.value = '';
-  for (const id of COMET_ONLY_PARAM_IDS) {
+  for (const id of IMAGE_API_PARAM_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = isGemini ? 'none' : '';
   }
@@ -68,6 +86,7 @@ function updateModelSpecificUI() {
   });
   // sizeTierLabel の表示状態をモデルに合わせて再評価する（Gemini では常に非表示）
   updateSizeSelectors();
+  updateProviderStatus();
 }
 
 // ---- Gemini スライダーと数値入力の同期 ----
@@ -84,7 +103,10 @@ function syncSlider(sliderId, numId) {
 syncSlider('gemini_temperature', 'gemini_temperature_num');
 syncSlider('gemini_top_p',       'gemini_top_p_num');
 
-document.getElementById('model').addEventListener('change', updateModelSpecificUI);
+modelSelect.addEventListener('change', () => {
+  localStorage.setItem('image-model-selection', modelSelect.value);
+  updateModelSpecificUI();
+});
 updateModelSpecificUI();
 
 // ---- プロンプト入力欄のオートグロー（スマホ向け） ----
@@ -134,7 +156,8 @@ function applyEntryParams(entry, { includePrompt = true } = {}) {
     document.getElementById('prompt').value = entry.prompt;
     autoGrowPrompt();
   }
-  document.getElementById('model').value  = entry.params.model || 'gpt-image-2';
+  modelSelect.value = modelSelectionValue(entry.params);
+  localStorage.setItem('image-model-selection', modelSelect.value);
   document.getElementById('n').value      = entry.params.n || 1;
 
   let orientation, ratio, tier;
@@ -241,13 +264,15 @@ document.addEventListener('keydown', (e) => {
 // ---- フォーム送信 ----
 document.getElementById('generateForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (document.getElementById('generateButton').disabled) return;
   const prompt = document.getElementById('prompt').value.trim();
   if (!prompt) return;
 
   const orientation = document.getElementById('sizeOrientation').value;
   const ratio       = document.getElementById('sizeRatio').value;
   const tier        = document.getElementById('sizeTier').value;
-  const model       = document.getElementById('model').value;
+  const selection = parseModelSelection(modelSelect.value);
+  const { model, provider } = selection;
 
   if (isGeminiModel(model)) {
     // Gemini API: size は aspect_ratio + image_size で指定
@@ -256,6 +281,7 @@ document.getElementById('generateForm').addEventListener('submit', async (e) => 
     const geminiTopP          = document.getElementById('gemini_top_p_num').value;
     const geminiThinkingLevel = document.getElementById('gemini_thinking_level').value;
     const params = {
+      provider,
       model,
       n:                    document.getElementById('n').value,
       gemini_aspect_ratio:  geminiAspectRatio,
@@ -279,10 +305,11 @@ document.getElementById('generateForm').addEventListener('submit', async (e) => 
     return;
   }
 
-  const sizeValue = computeResolution(orientation, ratio, tier);
+  const sizeValue = computeResolution(orientation, ratio, tier, selection);
   if (!sizeValue) { alert('選択した組み合わせで有効な解像度を計算できませんでした。'); return; }
 
   const params = {
+    provider,
     model,
     n:                  document.getElementById('n').value,
     size:               sizeValue,
@@ -354,6 +381,8 @@ function subscribe() {
     resetHeartbeatTimer();
     try {
       const msg = JSON.parse(ev.data);
+      providerAvailability = msg.providers || null;
+      updateProviderStatus();
       entries.clear();
       for (const entry of (msg.history || [])) entries.set(entry.id, entry);
       for (const entry of (msg.pending || [])) entries.set(entry.id, entry);

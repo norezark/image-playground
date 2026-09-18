@@ -4,6 +4,7 @@ import { el } from './utils.js';
 import { createLazyImageLoader } from './lazy-images.js';
 import { openLightbox } from './lightbox.js';
 import { openParamsPopup } from './params-popup.js';
+import { displayParams } from './model-selection.js';
 import { deleteEntry, cancelEntry, toggleFavorite } from './api.js';
 
 const historyList = document.getElementById('historyList');
@@ -27,6 +28,7 @@ const BORDER_COLOR_PALETTE = [
 const _entryBorderColorMap = new Map();
 let _nextBorderColorIndex = 0;
 let _renderedTiles = new Map();
+let _visibleImages = [];
 const lazyImages = createLazyImageLoader();
 
 function getEntryBorderColor(entryId) {
@@ -73,6 +75,7 @@ function getTileKey(entryId, imgUrl) {
 export function renderHistory(entries, changedIds) {
   const all = Array.from(entries.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   const nextRenderedTiles = new Map();
+  const visibleImages = [];
   let cursor = historyList.firstChild;
 
   const placeTile = (entry, imgUrl, borderColor) => {
@@ -103,6 +106,7 @@ export function renderHistory(entries, changedIds) {
       const borderColor = getEntryBorderColor(entry.id);
       entry.images.forEach(imgUrl => {
         if (_showFavoritesOnly && !entry.favoritedImages?.includes(imgUrl)) return;
+        visibleImages.push(imgUrl);
         placeTile(entry, imgUrl, borderColor);
       });
     } else {
@@ -119,6 +123,7 @@ export function renderHistory(entries, changedIds) {
   }
 
   _renderedTiles = nextRenderedTiles;
+  _visibleImages = visibleImages;
 }
 
 function statusLabel(entry) {
@@ -133,7 +138,7 @@ function statusLabel(entry) {
 function renderImageTile(entry, imgUrl, borderColor) {
   const status    = entry.status || (entry.images?.length ? 'completed' : entry.error ? 'error' : 'queued');
   const isPending = status === 'queued' || status === 'retrying';
-  const paramsText = Object.entries(entry.params || {})
+  const paramsText = Object.entries(displayParams(entry.params))
     .filter(([, v]) => v !== '' && v != null)
     .map(([k, v]) => `${k}: ${v}`)
     .join(', ');
@@ -142,7 +147,7 @@ function renderImageTile(entry, imgUrl, borderColor) {
   const tileImage = el('div', { class: 'tile-image' });
   if (imgUrl) {
     const historyImg = lazyImages.create(imgUrl, {
-      onclick: () => openLightbox(imgUrl),
+      onclick: () => openLightbox(imgUrl, _visibleImages),
     });
     tileImage.appendChild(historyImg);
     tileImage.style.cursor = 'zoom-in';

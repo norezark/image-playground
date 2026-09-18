@@ -27,17 +27,21 @@ image-playground/
 ├── tests/
 │   ├── image-api.test.cjs  # Images API のリクエスト回帰テスト（外部通信なし）
 │   ├── image-price.test.cjs # GPT Image 2.5 の公式料金計算例との照合
+│   ├── model-selection.test.cjs # 接続先を含むモデル選択・旧履歴の互換性
+│   ├── server-providers.test.cjs # HTTP/SSE/SQLite を通した接続先・キー未設定の検証
+│   ├── helpers/test-server.cjs # 外部APIを置き換えた一時サーバー（テスト専用）
 │   └── lazy-images.test.cjs # 画像読み込み数・スクロール時の待ち行列・キャンセルの回帰テスト
 ├── history.db             # 生成履歴（SQLite、自動生成）
 ├── server.pid             # バックグラウンド起動時の PID（自動生成）
 ├── lib/
 │   ├── db.js              # SQLite 初期化・マイグレーション・CRUD
-│   ├── api.js             # CometAPI / Gemini API 呼び出し関数
+│   ├── api.js             # CometAPI / OpenAI公式 / Gemini API 呼び出し・接続先検証
 │   └── generation.js      # 画像生成ループ（リトライ付き）のファクトリ
 └── public/
     ├── index.html         # SPA の唯一の HTML
     ├── style.css          # スタイルシート（ダークテーマ固定）
     ├── script.js          # エントリポイント（SSE 購読・フォーム送信・状態管理）
+    ├── model-selection.js # モデル選択値と接続先の変換・表示
     ├── utils.js           # DOM ヘルパー el()
     ├── api.js             # サーバー API 呼び出しラッパー
     ├── history.js         # 履歴タイルのレンダリング
@@ -61,7 +65,7 @@ image-playground/
 | ファイル | 役割 |
 |---|---|
 | `lib/db.js` | SQLite 初期化・`history.json` マイグレーション・`dbSaveEntry` / `dbDeleteEntry` / `dbLoadHistory` などの CRUD |
-| `lib/api.js` | `apiFetch` / `callGenerations` / `callEdits` / `callGemini` / `isGeminiModel` |
+| `lib/api.js` | `apiFetch` / `callGenerations` / `callEdits` / `callGemini` / `isGeminiModel` / `validateGenerationParams` / `getProviderAvailability` |
 | `lib/generation.js` | `createStartGeneration` ファクトリ。共有状態（`pendingEntries` 等）を引数として受け取り、リトライ付きの `startGeneration` 関数を返す |
 | `server.js` | `.env` 読み込み・設定・状態管理・ルートハンドラ・HTTP サーバー |
 
@@ -74,7 +78,7 @@ image-playground/
 | `GET` | `/` | `public/index.html` を返す |
 | `GET` | `/events` | SSE ストリーム（クライアントはここで状態を受信） |
 | `GET` | `/history` | 履歴全件を JSON で返す |
-| `POST` | `/generate` | 画像生成リクエスト（即座に HTTP 202 を返し非同期処理） |
+| `POST` | `/generate` | 接続先・モデル・キー設定を検証し、HTTP 202 を返して非同期処理。不正な組み合わせ・キー未設定は入力画像保存前にHTTP 400 |
 | `POST` | `/cancel` | 生成キャンセル（`AbortController.abort()` を呼び出す） |
 | `POST` | `/delete` | 履歴エントリ削除（DB + 画像ファイル削除、全 SSE クライアントに通知） |
 | `GET` | `/images/*` | 生成画像ファイルの静的配信 |
@@ -82,6 +86,15 @@ image-playground/
 | `GET` | `/<その他>` | `public/` 配下の静的ファイル配信 |
 
 CORS は全オリジン許可（ローカル利用専用のため）。
+
+### 接続先と認証
+
+- 生成パラメータの `provider` は `cometapi` / `openai` / `gemini`。省略時はモデル名が `gemini-` で始まればGemini、それ以外は従来のCometAPIとする。
+- CometAPIは `https://api.cometapi.com/v1/images`、OpenAI公式は `https://api.openai.com/v1/images` に対し、生成は `/generations`、編集は `/edits` を使用する。接続先はリクエストごとに決まり、同時実行中の他リクエストの選択に影響されない。
+- CometAPIキーは `COMET_API_KEY` を優先し、未設定時だけ従来の `OPENAI_API_KEY` を使用する。公式は `OPENAI_OFFICIAL_API_KEY`、Geminiは `NANO_BANANA_API_KEY` を使用し、接続先をまたぐキーのフォールバックは行わない。
+- `validateGenerationParams` はプロバイダー名・モデルとの組み合わせ・公式のモデル一覧・公式旧モデルの標準サイズ・キーの有無を検証する。公式の生成では `output_format` を使用し、編集用の `input_fidelity` とGPT Imageに非対応の `style` は送信しない。CometAPIの既存送信形式は維持する。
+- キュー・SSE・SQLiteの `params` に `provider` を保存する。APIキーやブラウザ専用の選択値は保存・配信しない。
+- 外部APIの仕様: [生成](https://developers.openai.com/api/reference/resources/images/methods/generate)、[編集](https://developers.openai.com/api/reference/resources/images/methods/edit)。
 
 ---
 
@@ -105,7 +118,7 @@ queued → (キャンセル)   → cancelled
 ### SSE 設計（`/events`）
 
 - `Content-Type: text/event-stream` で永続接続。
-- 新規接続時に `init` イベントとして現在の全履歴＋進行中エントリを一括送信する。
+- 新規接続時に `init` イベントとして現在の全履歴＋進行中エントリと、キー設定の有無だけを示す `providers: { cometapi: boolean, openai: boolean, gemini: boolean }` を送信する。
 - 以降は状態変化のたびに全接続クライアントへブロードキャストする。
 - 接続ごとに `clock` イベントを 1 秒ごとに送信し、サーバー現在時刻（ISO 8601）を通知する。
 - 10 秒ごとにコメント行（`: heartbeat`）を送信してプロキシによる強制切断を防ぐ。
@@ -168,14 +181,15 @@ queued → (キャンセル)   → cancelled
 | ファイル | 役割 |
 |---|---|
 | `script.js` | アプリエントリポイント。SSE 購読、フォーム送信、状態管理 |
+| `model-selection.js` | 公式モデルの選択値 `openai:<model>` と `{ provider, model }` の変換・接続先表示・標準サイズモデル判定 |
 | `api.js` | `fetch` ラッパー。`/generate`, `/cancel`, `/delete` を呼び出す |
 | `history.js` | 履歴配列を受け取りタイルを DOM に反映する |
 | `lazy-images.js` | 生成画像と入力画像の先読み、同時読み込み数、取り外した画像のキャンセルを管理する |
 | `image-input.js` | ドロップゾーン・ファイル選択・クリップボードペーストによる入力画像の管理 |
 | `size-selector.js` | 向き・アスペクト比・大きさの組み合わせから `size` パラメータを計算 |
 | `price-estimate.js` | 選択中のパラメータから概算料金を計算・表示 |
-| `image-price.js` | GPT Image 2.5 の品質・解像度から出力トークン数と標準CometAPI料金を推定 |
-| `lightbox.js` | 画像の全画面表示・ズーム・パン・タッチ操作 |
+| `image-price.js` | GPT Image 2.5 の品質・解像度から出力トークン数と接続先別の料金を推定 |
+| `lightbox.js` | 画像の全画面表示・ズーム・パン・未ズーム時のスワイプによる前後移動 |
 | `params-popup.js` | 履歴タイルのプロンプト・パラメータ表示クリック時に、生成パラメータ一覧とプロンプト全文コピー・プロンプトのみロードのボタンを表示するポップアップ |
 | `utils.js` | `el(tag, attrs, children)` DOM 生成ヘルパー |
 
@@ -205,15 +219,31 @@ el('div', { className: 'tile' }, [
 - 2026-09-13にPixel 10 / Android 17 / Chrome 152でUSBトレースを比較。再読み込み後の初回フォーカスを含むメインスレッド処理は3,702msから159ms、同処理中のレイアウトは1,631回から0回に減少。修正後の3回は159 / 181 / 147msで、実機操作でも入力・スクロールの改善を確認した。これらはChromeの処理時間であり、キーボードの表示アニメーション全体の所要時間ではない。
 - 未読み込み画像の背景は静止表示にして、スクロール中のアニメーション描画を減らす。
 
+### ライトボックスの画像切り替え
+
+- `history.js` は履歴を描画する際に、表示順・お気に入りフィルター適用後の画像URL一覧を保持する。画像を開くときに `openLightbox(src, images)` へ渡し、ライトボックスはその時点の一覧をコピーして使う。未読み込みの画像も移動対象となり、画像のないタイルや入力画像は対象外。
+- 未ズーム時の1本指の横スワイプ、またはマウス左ボタンの横ドラッグで前後の画像へ移動する。操作終了時に共通の `lbSwipe()` で左右50px以上、縦移動の1.25倍を超える横移動を判定し、先頭・末尾では止まる。ズーム中は従来どおりパンする。
+- マウスでは画像のネイティブなドラッグを抑制し、操作ボタンからのドラッグは対象外とする。ドラッグ後のクリックはキャプチャ段階で抑制して背景・ボタンの誤操作を防ぎ、ダブルクリックによるズームとも区別する。ウィンドウがフォーカスを失った場合やボタンを離して戻ってきた場合はドラッグを中断する。
+- ピンチ、ドラッグ、キャンセルしたタッチはダブルタップとして扱わず、操作後のクリックで誤って閉じることも防ぐ。
+- 切り替え先の画像ごとに表示倍率・位置をリセットして画面内に収める。画像切り替えではブラウザ履歴を追加せず、戻る操作1回で閉じる。
+
 ### GPT Image 2.5
 
-- `index.html` に `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` を登録。既存の CometAPI Images エンドポイントと API キーで生成・編集する。
+- `index.html` に `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` をCometAPIとOpenAI公式のグループに登録。各接続先の Images エンドポイントと専用APIキーで生成・編集する。
 - `script.js` は `xhigh` / `max` を 2.5 選択時のみ有効化し、他モデルへの切り替え時は非対応の品質値を Default に戻す。履歴の Load でも同じ制御を適用する。
 - `lib/api.js` は 2.5 の生成リクエストに `output_format` を使用し、編集用の `input_fidelity` は生成時に送らない。編集時は従来通り multipart の `output_format` / `input_fidelity` を使用する。
 - `image-price.js` は公式計算器と同じ式を使用する。品質ごとの長辺グリッドは `low=16, medium=24, high=48, xhigh=64, max=96`。短辺グリッドは長辺グリッド÷アスペクト比を偶数丸めし、出力トークン数は `ceil(長辺グリッド × 短辺グリッド × (2,000,000 + 幅×高さ) / 4,000,000)`。CometAPI標準料金は公式 `$30/1M` × `0.8` の `$24/1M`（2026-09-09確認）。
 - `price-estimate.js` は2.5の出力料金を小数点以下5桁で表示する。枚数分の合計は丸め前の値で計算。品質 Default / Auto は Low〜Max の範囲、サイズ Auto は1024×1024の参考値と明記する。入力料金・リトライは含めない。
 - サイズ指定は既存の計算を使用する（16px 単位、最大辺 3840px、比率 1:3〜3:1、総画素数 655,360〜8,294,400）。
 - 仕様: [Image generation](https://developers.openai.com/api/docs/guides/image-generation)、[CometAPI標準料金](https://www.cometapi.com/pricing/)。API リクエスト・料金計算の回帰確認は `node --test` で実行する（外部通信なし）。
+
+### モデルと接続先の選択
+
+- Model欄のグループはCometAPI／OpenAI公式／Nano Banana (Gemini API)。公式の選択値だけ `openai:` を付け、送信時は `model-selection.js` で実モデル名と `provider` に分離する。`gpt-image-2-all` はCometAPIのみに表示する。
+- 選択を `localStorage` の `image-model-selection` に保存する。履歴のLoad・Editでも接続先を復元し、`provider` のない旧履歴は従来の接続先として扱う。
+- SSEの `providers` で選択先の設定状況を確認する。未設定時はモデルを選択したまま案内を表示し、Generateを無効にする。キーの設定状況を受信する前も生成を無効にする。
+- 公式のGPT Image 1 / 1.5 / 1 miniは向きに応じた標準サイズを使用し、比率・サイズ階層の操作を表示しない。GPT Image 2 / 2.5とCometAPIには従来のサイズ計算を使う。
+- 料金表示は接続先に連動し、CometAPIだけ標準20%割引を適用する。公式のGPT Image 2.5は `$30/1M`、CometAPIは `$24/1M` で画像出力分を見積もる。
 
 ### SSE 購読と状態管理（`script.js`）
 

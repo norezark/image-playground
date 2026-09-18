@@ -4,7 +4,7 @@
 // 単価: https://www.cometapi.com/models/openai/gpt-image-2-5-flare/
 // 標準割引: https://www.cometapi.com/pricing/ （公式単価 × 0.8）
 const QUALITY_GRID = { low: 16, medium: 24, high: 48, xhigh: 64, max: 96 };
-const OUTPUT_USD_PER_MILLION = 30 * 0.8;
+const OFFICIAL_OUTPUT_USD_PER_MILLION = 30;
 
 export function estimateImage25Tokens(width, height, quality) {
   const gridLong = QUALITY_GRID[quality];
@@ -23,7 +23,8 @@ export function estimateImage25Tokens(width, height, quality) {
   return Math.ceil(gridLong * gridShort * (2000000 + pixels) / 4000000);
 }
 
-export function estimateImage25Price(size, quality) {
+export function estimateImage25Price(size, quality, provider = 'cometapi') {
+  const outputRate = OFFICIAL_OUTPUT_USD_PER_MILLION * (provider === 'openai' ? 1 : 0.8);
   const assumptions = [];
   if (!size || size === 'auto') {
     size = '1024x1024';
@@ -38,8 +39,8 @@ export function estimateImage25Price(size, quality) {
   if (tokens.some(value => value === null)) return null;
   if (automaticQuality) assumptions.push('品質Auto: Low〜Maxの範囲');
   return {
-    minPerImage: Math.min(...tokens) * OUTPUT_USD_PER_MILLION / 1000000,
-    maxPerImage: Math.max(...tokens) * OUTPUT_USD_PER_MILLION / 1000000,
+    minPerImage: Math.min(...tokens) * outputRate / 1000000,
+    maxPerImage: Math.max(...tokens) * outputRate / 1000000,
     assumptions,
   };
 }

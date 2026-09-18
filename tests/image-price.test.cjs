@@ -33,6 +33,14 @@ test('CometAPI standard output rate is applied without rounding the unit price e
   assert.deepEqual(result.assumptions, []);
 });
 
+test('official output prices omit the CometAPI discount for fixed and auto quality', async () => {
+  const { estimateImage25Price } = await priceModule;
+  assert.equal(estimateImage25Price('1024x1024', 'medium', 'openai').minPerImage, 0.01317);
+  const result = estimateImage25Price('1024x1024', 'auto', 'openai');
+  assert.equal(result.minPerImage, 0.00588);
+  assert.equal(result.maxPerImage, 0.21072);
+});
+
 test('default and auto quality show low-to-max range instead of assuming medium', async () => {
   const { estimateImage25Price } = await priceModule;
   for (const quality of ['', 'auto', undefined]) {

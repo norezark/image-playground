@@ -1,6 +1,7 @@
 // size-selector.js – サイズ計算とビジュアルセレクタ
 
 import { updatePriceEstimate } from './price-estimate.js';
+import { parseModelSelection, usesStandardImageSizes } from './model-selection.js';
 
 // Gemini API 用アスペクト比マッピング
 const GEMINI_ASPECT_RATIO_MAP = {
@@ -32,8 +33,11 @@ const ASPECT_RATIOS_MAP = {
   '3:1':  [3, 1],
 };
 
-export function computeResolution(orientation, ratio, tier) {
+export function computeResolution(orientation, ratio, tier, selection) {
   if (orientation === 'auto') return 'auto';
+  if (usesStandardImageSizes(selection)) {
+    return orientation === 'square' ? '1024x1024' : orientation === 'portrait' ? '1024x1536' : '1536x1024';
+  }
   const baseLong = SIZE_TIERS[tier] || 1024;
   if (orientation === 'square') {
     const maxSquare = Math.floor(Math.sqrt(8294400) / 16) * 16;
@@ -90,14 +94,18 @@ export function setVisualGroup(groupId, inputId, value) {
 }
 
 export function updateSizeSelectors() {
-  const model     = document.getElementById('model').value;
+  const selection = parseModelSelection(document.getElementById('model').value);
+  const { model } = selection;
+  const standardSizes = usesStandardImageSizes(selection);
   const isGemini  = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'].includes(model);
   const orientation = document.getElementById('sizeOrientation').value;
   const isAuto      = orientation === 'auto';
   const isSquare    = orientation === 'square';
   const isPortrait  = orientation === 'portrait';
-  document.getElementById('sizeRatioLabel').style.display = (isAuto || isSquare) ? 'none' : '';
+  document.getElementById('sizeRatioLabel').style.display = (isAuto || isSquare || standardSizes) ? 'none' : '';
   document.getElementById('sizeTierLabel').style.display  = (isAuto || isGemini) ? 'none' : '';
+  document.getElementById('sizeTier').style.display = standardSizes ? 'none' : '';
+  document.getElementById('sizeTier').disabled = standardSizes;
 
   document.querySelectorAll('#sizeRatioGroup .vis-shape[data-lw]').forEach(shape => {
     const { lw, lh } = shape.dataset;
@@ -109,6 +117,7 @@ export function updateSizeSelectors() {
     orientation,
     document.getElementById('sizeRatio').value,
     document.getElementById('sizeTier').value,
+    selection,
   );
   document.getElementById('sizePreview').textContent = res && res !== 'auto' ? `= ${res.replace('x', ' × ')}` : '';
   updatePriceEstimate();

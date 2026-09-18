@@ -1,6 +1,7 @@
 // params-popup.js – 生成パラメータ一覧のポップアップ表示
 
 import { el } from './utils.js';
+import { displayParams } from './model-selection.js';
 
 const popup   = document.getElementById('paramsPopup');
 const promptEl = document.getElementById('paramsPopupPrompt');
@@ -19,7 +20,7 @@ export function initParamsPopup(loadPromptOnly) {
 
 function renderParamsList(entry) {
   listEl.innerHTML = '';
-  const rows = Object.entries(entry.params || {})
+  const rows = Object.entries(displayParams(entry.params))
     .filter(([, v]) => v !== '' && v != null);
 
   for (const [key, value] of rows) {

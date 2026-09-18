@@ -21,20 +21,25 @@ if (fs.existsSync(envFile)) {
 const PORT        = process.env.PORT || 8000;
 const MAX_RETRIES = Number(process.env.MAX_RETRIES) || 10;
 
-if (!process.env.OPENAI_API_KEY && !process.env.NANO_BANANA_API_KEY) {
-  console.error('エラー: OPENAI_API_KEY または NANO_BANANA_API_KEY が設定されていません。.env ファイルを確認してください。');
+const { isGeminiModel, callGenerations, callEdits, callGemini,
+  getProviderAvailability, validateGenerationParams } = require('./lib/api');
+const providers = getProviderAvailability();
+if (!Object.values(providers).some(Boolean)) {
+  console.error('エラー: COMET_API_KEY（旧 OPENAI_API_KEY）、OPENAI_OFFICIAL_API_KEY、NANO_BANANA_API_KEY のいずれかを設定してください。');
   process.exit(1);
 }
-if (!process.env.OPENAI_API_KEY) {
-  console.warn('警告: OPENAI_API_KEY が未設定です。CometAPI モデルは使用できません。');
+if (!providers.cometapi) {
+  console.warn('警告: CometAPI のキーが未設定です。CometAPI モデルは使用できません。');
 }
-if (!process.env.NANO_BANANA_API_KEY) {
+if (!providers.openai) {
+  console.warn('警告: OPENAI_OFFICIAL_API_KEY が未設定です。OpenAI公式モデルは使用できません。');
+}
+if (!providers.gemini) {
   console.warn('警告: NANO_BANANA_API_KEY が未設定です。Nano Banana モデルは使用できません。');
 }
 
 // ---- モジュール読み込み（.env ロード後） ----
 const { dbSaveEntry, dbDeleteEntry, dbLoadHistory, _stmtFindIdx, _stmtFavoriteImages } = require('./lib/db');
-const { isGeminiModel, callGenerations, callEdits, callGemini } = require('./lib/api');
 const { createStartGeneration } = require('./lib/generation');
 
 // ---- パス定数 ----
@@ -89,6 +94,7 @@ function sendInitialState(res) {
     type: 'init',
     history,
     pending: Array.from(pendingEntries.values()),
+    providers: getProviderAvailability(),
   });
   res.write(`event: init\ndata: ${data}\n\n`);
 }
@@ -193,6 +199,12 @@ async function handleGenerate(req, res) {
   if (!data) return jsonResponse(res, 400, { error: 'JSON が不正です' });
   const { prompt, params, inputImages } = data;
   if (!prompt || typeof prompt !== 'string') return jsonResponse(res, 400, { error: 'prompt が必要です' });
+  let generationParams;
+  try {
+    generationParams = validateGenerationParams(params);
+  } catch (err) {
+    return jsonResponse(res, 400, { error: err.message });
+  }
 
   const savedInputImagePaths = [];
   const inputImageFiles = [];
@@ -219,7 +231,7 @@ async function handleGenerate(req, res) {
   const entry = {
     id,
     prompt,
-    params:      params || {},
+    params:      generationParams,
     images:      [],
     inputImages: savedInputImagePaths.length ? savedInputImagePaths : undefined,
     timestamp:   new Date().toISOString(),
@@ -228,7 +240,7 @@ async function handleGenerate(req, res) {
   };
   pendingEntries.set(id, entry);
   broadcast({ type: 'queued', entry });
-  startGeneration(id, entry, prompt, params || {}, inputImageFiles);
+  startGeneration(id, entry, prompt, generationParams, inputImageFiles);
 }
 
 async function handleStaticFile(pathname, res) {
@@ -266,5 +278,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`サーバー起動: http://localhost:${PORT}`);
+  console.log(`サーバー起動: http://localhost:${server.address().port}`);
 });

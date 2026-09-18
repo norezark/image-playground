@@ -23,7 +23,7 @@
 - **エントリポイント**: `server.js`（HTTP サーバー + SSE + 生成キュー）
 - **フロントエンド**: `public/index.html` + `public/script.js` + `public/style.css`
 - **永続化**: `history.db`（生成履歴）、`public/images/`（生成画像）、`public/images/inputs/`（入力画像）
-- **API**: `https://api.cometapi.com/v1/images/generations`（生成）、`https://api.cometapi.com/v1/images/edits`（編集）
+- **API**: CometAPIは `https://api.cometapi.com/v1/images`、OpenAI公式は `https://api.openai.com/v1/images` の `/generations`（生成）・`/edits`（編集）。`params.provider` で選択し、キー設定を接続先ごとに分離する。GeminiはGoogleのネイティブAPIを使用する
 
 ## コード規約
 

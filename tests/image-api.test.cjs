@@ -1,7 +1,20 @@
 'use strict';
-const { test } = require('node:test');
+const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { callGenerations, callEdits } = require('../lib/api');
+const { callGenerations, callEdits, getProviderAvailability, validateGenerationParams } = require('../lib/api');
+
+beforeEach(t => {
+  const keys = { OPENAI_API_KEY: 'test-legacy-comet', COMET_API_KEY: '',
+    OPENAI_OFFICIAL_API_KEY: 'test-official', NANO_BANANA_API_KEY: 'test-gemini' };
+  for (const [name, value] of Object.entries(keys)) {
+    const original = process.env[name];
+    process.env[name] = value;
+    t.after(() => {
+      if (original === undefined) delete process.env[name];
+      else process.env[name] = original;
+    });
+  }
+});
 
 for (const model of ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst']) {
   test(`${model}: generations sends new quality and output format`, async (t) => {
@@ -70,4 +83,82 @@ test('existing CometAPI models retain their generation format parameter', async 
     assert.equal(payload.format, 'jpeg');
     assert.equal('output_format' in payload, false);
   }
+});
+
+test('official models use the official host, dedicated key and generation parameter names', async t => {
+  let request;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    request = { url, ...options };
+    return { ok: true, json: async () => ({ data: [] }) };
+  });
+  for (const model of ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini']) {
+    await callGenerations('A circle', { provider: 'openai', model, format: 'jpeg', input_fidelity: 'high', style: 'vivid' });
+    assert.equal(request.url, 'https://api.openai.com/v1/images/generations');
+    assert.equal(request.headers.Authorization, 'Bearer test-official');
+    const payload = JSON.parse(request.body);
+    assert.equal(payload.model, model);
+    assert.equal(payload.output_format, 'jpeg');
+    for (const field of ['format', 'provider', 'input_fidelity', 'style']) assert.equal(field in payload, false);
+  }
+});
+
+test('edits select endpoint and credentials per request without mixing providers', async t => {
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    requests.push({ url, ...options });
+    return { ok: true, json: async () => ({ data: [] }) };
+  });
+  process.env.COMET_API_KEY = 'test-dedicated-comet';
+  const signal = new AbortController().signal;
+  const files = [{ filename: 'input.png', mimeType: 'image/png', buffer: Buffer.from('input') }];
+  await Promise.all(['openai', 'cometapi'].map(provider => callEdits('An edit', {
+    provider, model: 'gpt-image-2.5-flare', format: 'webp', input_fidelity: 'high',
+  }, files, signal)));
+  for (const [index, host, key] of [[0, 'api.openai.com', 'test-official'], [1, 'api.cometapi.com', 'test-dedicated-comet']]) {
+    const request = requests[index];
+    assert.equal(request.url, `https://${host}/v1/images/edits`);
+    assert.equal(request.headers.Authorization, `Bearer ${key}`);
+    assert.equal(request.signal, signal);
+    assert.equal(request.body.get('model'), 'gpt-image-2.5-flare');
+    assert.equal(request.body.get('output_format'), 'webp');
+    assert.equal(request.body.get('input_fidelity'), 'high');
+    assert.equal(request.body.has('provider'), false);
+    assert.equal(await request.body.get('image[]').text(), 'input');
+  }
+});
+
+test('legacy requests keep CometAPI routing and dedicated CometAPI key takes precedence', async t => {
+  let request;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    request = { url, ...options };
+    return { ok: true, json: async () => ({ data: [] }) };
+  });
+  await callGenerations('A circle', { model: 'gpt-image-2' });
+  assert.equal(request.url, 'https://api.cometapi.com/v1/images/generations');
+  assert.equal(request.headers.Authorization, 'Bearer test-legacy-comet');
+  process.env.COMET_API_KEY = 'test-dedicated-comet';
+  await callGenerations('A circle', { model: 'gpt-image-2' });
+  assert.equal(request.headers.Authorization, 'Bearer test-dedicated-comet');
+});
+
+test('missing official key fails before any network request and never falls back to CometAPI', async t => {
+  delete process.env.OPENAI_OFFICIAL_API_KEY;
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected network request'); });
+  await assert.rejects(callGenerations('A circle', { provider: 'openai', model: 'gpt-image-2' }), /OPENAI_OFFICIAL_API_KEY/);
+  await assert.rejects(callEdits('An edit', { provider: 'openai', model: 'gpt-image-2' }, []), /OPENAI_OFFICIAL_API_KEY/);
+  assert.equal(fetchMock.mock.callCount(), 0);
+  assert.deepEqual(getProviderAvailability(), { cometapi: true, openai: false, gemini: true });
+});
+
+test('unsupported provider/model pairs and official legacy sizes fail before queuing', () => {
+  for (const params of [
+    { provider: 'openai', model: 'gpt-image-2-all' },
+    { provider: 'openai', model: 'gemini-2.5-flash-image' },
+    { provider: 'gemini', model: 'gpt-image-2' },
+    { provider: 'unknown', model: 'gpt-image-2' },
+    { provider: ['openai'], model: 'gpt-image-2' },
+    { provider: 'openai', model: 'gpt-image-1.5', size: '2048x2048' },
+  ]) assert.throws(() => validateGenerationParams(params));
+  assert.equal(validateGenerationParams({ model: 'gpt-image-2' }).provider, 'cometapi');
+  assert.equal(validateGenerationParams({ model: 'gemini-2.5-flash-image' }).provider, 'gemini');
 });
