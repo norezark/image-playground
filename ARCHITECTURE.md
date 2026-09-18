@@ -11,7 +11,7 @@
 | 項目 | 内容 |
 |---|---|
 | ランタイム | Node.js v22.5 以上 |
-| 外部依存 | なし（npm パッケージ不使用） |
+| 外部依存 | npm パッケージ不使用。任意のSynthID前処理のみPython / CUDA / remove-ai-watermarksを使用 |
 | サーバー側モジュール | `http`, `fs`, `path`, `crypto`, `node:sqlite` |
 | フロントエンド | バニラ JS（バンドラー不使用） |
 | DB | SQLite（`node:sqlite` 組み込み） |
@@ -24,11 +24,17 @@
 image-playground/
 ├── server.js              # HTTP サーバー・ルーティング・SSE（~260行）
 ├── server.ps1             # バックグラウンド起動管理スクリプト
+├── scripts/
+│   ├── setup-synthid.ps1   # 任意のPython/CUDA環境をプロジェクト内に準備
+│   └── synthid-worker.py  # 固定バージョンの除去CLI・入出力検証
+├── .synthid/              # 除去用ランタイム・モデル・一時ファイル（Git管理外）
 ├── tests/
 │   ├── image-api.test.cjs  # Images API のリクエスト回帰テスト（外部通信なし）
 │   ├── image-price.test.cjs # GPT Image 2.5 の公式料金計算例との照合
 │   ├── model-selection.test.cjs # 接続先を含むモデル選択・旧履歴の互換性
 │   ├── server-providers.test.cjs # HTTP/SSE/SQLite を通した接続先・キー未設定の検証
+│   ├── synthid.test.cjs    # 前処理の任意実行・API入力・失敗・キャンセル・再試行
+│   ├── image-store.test.cjs # 入力画像の重複排除・永続キャッシュ・同時依頼の検証
 │   ├── helpers/test-server.cjs # 外部APIを置き換えた一時サーバー（テスト専用）
 │   └── lazy-images.test.cjs # 画像読み込み数・スクロール時の待ち行列・キャンセルの回帰テスト
 ├── history.db             # 生成履歴（SQLite、自動生成）
@@ -36,6 +42,8 @@ image-playground/
 ├── lib/
 │   ├── db.js              # SQLite 初期化・マイグレーション・CRUD
 │   ├── api.js             # CometAPI / OpenAI公式 / Gemini API 呼び出し・接続先検証
+│   ├── synthid.js         # ローカル除去ワーカーの起動・直列化・状態確認
+│   ├── image-store.js     # 入力画像の共有保存・除去結果の永続キャッシュ
 │   └── generation.js      # 画像生成ループ（リトライ付き）のファクトリ
 └── public/
     ├── index.html         # SPA の唯一の HTML
@@ -67,6 +75,8 @@ image-playground/
 | `lib/db.js` | SQLite 初期化・`history.json` マイグレーション・`dbSaveEntry` / `dbDeleteEntry` / `dbLoadHistory` などの CRUD |
 | `lib/api.js` | `apiFetch` / `callGenerations` / `callEdits` / `callGemini` / `isGeminiModel` / `validateGenerationParams` / `getProviderAvailability` |
 | `lib/generation.js` | `createStartGeneration` ファクトリ。共有状態（`pendingEntries` 等）を引数として受け取り、リトライ付きの `startGeneration` 関数を返す |
+| `lib/synthid.js` | Pythonワーカーの実行・GPU処理の直列化・キャッシュ利用 |
+| `lib/image-store.js` | 入力画像の共有保存・除去結果の永続化 |
 | `server.js` | `.env` 読み込み・設定・状態管理・ルートハンドラ・HTTP サーバー |
 
 > **依存方向**: `server.js` → `lib/*.js`（`lib/` 同士の依存はなし）
@@ -78,9 +88,10 @@ image-playground/
 | `GET` | `/` | `public/index.html` を返す |
 | `GET` | `/events` | SSE ストリーム（クライアントはここで状態を受信） |
 | `GET` | `/history` | 履歴全件を JSON で返す |
+| `GET` | `/synthid/status` | エンジンの状態（`available`, `version`, `device`、失敗時は `message`）と現行処理バージョンのキャッシュ件数 `cachedImages`。推論は行わない |
 | `POST` | `/generate` | 接続先・モデル・キー設定を検証し、HTTP 202 を返して非同期処理。不正な組み合わせ・キー未設定は入力画像保存前にHTTP 400 |
 | `POST` | `/cancel` | 生成キャンセル（`AbortController.abort()` を呼び出す） |
-| `POST` | `/delete` | 履歴エントリ削除（DB + 画像ファイル削除、全 SSE クライアントに通知） |
+| `POST` | `/delete` | 履歴エントリをDBから削除し、全 SSE クライアントに通知。画像ファイル・共有キャッシュは保持 |
 | `GET` | `/images/*` | 生成画像ファイルの静的配信 |
 | `GET` | `/images/inputs/*` | 入力画像ファイルの静的配信 |
 | `GET` | `/<その他>` | `public/` 配下の静的ファイル配信 |
@@ -100,18 +111,34 @@ CORS は全オリジン許可（ローカル利用専用のため）。
 
 ### 生成キュー
 
-- `POST /generate` は `AbortController` を生成してキューに積み、即座に `202 Accepted` を返す。
-- キュー処理はシングルスレッドの非同期ループで順次実行される（並列実行なし）。
-- 1 リクエストに対して `n` 枚の画像生成が要求された場合、枚数分の処理が独立したキューエントリとして扱われる。
+- 1リクエストにつき1つの進行中エントリと `AbortController` を持つ。設定検証後に `202 Accepted` を返し、API処理はリクエスト間で並行する。
+- 前処理が有効な場合は入力形式も検証する。エンジンの利用可否は未キャッシュ画像がある場合だけ確認する。
 
 #### 状態遷移
 
 ```
-queued → (API 呼び出し) → completed
-                        ↘ retry → (再試行) → completed
-                                             ↘ error
-queued → (キャンセル)   → cancelled
+queued → [preprocessing → generating] → completed
+                                      ↘ retrying → completed / error
+queued / preprocessing / generating / retrying → cancelled
 ```
+
+角括弧は `params.remove_synthid: true` の場合のみ。全入力の前処理が成功してからAPIを呼び、APIの再試行には同じ結果を使う。前処理の失敗は `error` で終了する。
+
+### SynthID前処理
+
+`lib/synthid.js` がPythonワーカーを子プロセスとして起動する。ワーカーは `remove-ai-watermarks[qwen-zimage]==0.41.1` を使い、入力と同じ解像度のPNGを返す。
+
+GPU処理はアプリ全体で1枚ずつ実行する。処理直前にもキャッシュを確認し、同じ画像の同時依頼による重複実行を避ける。キャッシュヒットはGPUの待ち行列を通らない。
+
+Chromaには上流のCPUオフロードが適用されないため、ワーカーで `_load_global` を差し替え、Diffusersの `apply_group_offloading` で重みをディスクへ退避する。作業領域 `.synthid/jobs/` の一時ファイルは処理終了時に削除する。
+
+### 入力画像の共有保存・前処理キャッシュ
+
+元画像と前処理結果はファイル全体のSHA-256で識別し、`public/images/inputs/sha256-<hash>.<ext>` に共有保存する。既存ファイルは元のURLを使い、以前の除去結果は履歴から利用時に登録する。
+
+キャッシュキーは入力ハッシュと処理バージョンの組。処理バージョンはエンジンの固定バージョンとワーカーファイルの内容から作る。結果の存在・ハッシュ・PNG形式を利用時に確認し、欠落・破損時は再処理する。
+
+結果は1枚の処理が成功した時点で保存し、履歴はそのURLを参照する。共有ファイルとキャッシュは、後続の処理の失敗・キャンセルや履歴削除でも保持する。
 
 ---
 
@@ -131,6 +158,7 @@ queued → (キャンセル)   → cancelled
 | `init` | 新規接続時（履歴全件 + 進行中の状態を含む） |
 | `clock` | 1 秒ごと（サーバー現在時刻の通知） |
 | `queued` | 生成リクエスト受理時 |
+| `processing` | 前処理の進捗とAPI呼び出し開始。`entry.progress` に進捗文言を含む |
 | `retry` | リトライ発生時 |
 | `completed` | 生成成功時 |
 | `error` | 最終失敗時 |
@@ -153,22 +181,36 @@ queued → (キャンセル)   → cancelled
 
 `node:sqlite` 組み込みモジュールを使用し、外部パッケージ不要で永続化する。
 
-**テーブル: `history`**
+**テーブル: `entries`**
 
 | カラム | 型 | 説明 |
 |---|---|---|
-| `id` | TEXT PRIMARY KEY | `crypto.randomUUID()` で生成 |
+| `id` | TEXT PRIMARY KEY | 生成リクエストのID |
 | `prompt` | TEXT | プロンプト文字列 |
 | `params` | TEXT | 生成パラメータ（JSON 文字列） |
-| `status` | TEXT | `completed` / `error` / `cancelled` |
-| `imageUrl` | TEXT | 生成画像の URL パス |
-| `inputImages` | TEXT | 入力画像 URL の JSON 配列 |
+| `status` | TEXT | 完了時の `completed` / `error`（進行中・キャンセル済みエントリは保存しない） |
+| `images` | TEXT | 生成画像 URL の JSON 配列 |
+| `input_images` | TEXT | 元の入力画像 URL の JSON 配列（レスポンスでは `inputImages`） |
+| `processed_input_images` | TEXT | 任意の前処理後の入力画像 URL の JSON 配列（レスポンスでは `processedInputImages`） |
 | `error` | TEXT | エラーメッセージ（失敗時のみ） |
-| `createdAt` | TEXT | ISO 8601 形式の生成日時 |
+| `timestamp` | TEXT | ISO 8601 形式の生成日時 |
+| `retries` | INTEGER | APIの再試行回数（前処理失敗は0） |
+| `favorited_images` | TEXT | お気に入り画像 URL の JSON 配列 |
+
+**キャッシュ用テーブル**
+
+| テーブル | カラム・キー | 用途 |
+|---|---|---|
+| `image_assets` | `hash` PRIMARY KEY, `url` UNIQUE, `mime_type` | 画像の内容と共有ファイルの対応 |
+| `synthid_cache` | `(input_hash, recipe)` PRIMARY KEY, `output_hash` | 入力画像・処理バージョンから除去結果を検索 |
+| `image_cache_settings` | `name` PRIMARY KEY, `value` | 旧結果の再利用を許す `recipe`。初回起動時に固定 |
+
+`synthid_cache.output_hash = ''` は無効化済みの結果を表し、旧履歴からの再登録を防ぐ。
 
 ### マイグレーション
 
 旧形式の `history.json` が存在する場合、初回起動時に自動で SQLite へ移行し、元ファイルを `history.json.bak` にリネームする。
+`processed_input_images` がないDBには起動時にカラムを追加する。
 
 ---
 

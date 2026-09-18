@@ -13,6 +13,8 @@ import { parseModelSelection, modelSelectionValue, PROVIDER_LABELS } from './mod
 // 生成エントリのマップ。キーは ID、値は { id, prompt, params, images, inputImages, timestamp, retries, status, error }
 const entries = new Map();
 let providerAvailability = null;
+let synthidAvailability = null;
+const synthidCheckbox = document.getElementById('remove_synthid');
 const modelSelect = document.getElementById('model');
 const savedModel = localStorage.getItem('image-model-selection');
 if (savedModel && Array.from(modelSelect.options).some(option => option.value === savedModel)) {
@@ -27,8 +29,30 @@ function updateProviderStatus() {
   status.textContent = providerAvailability
     ? `${PROVIDER_LABELS[provider]} のAPIキーが未設定です。キーの設定とサーバーの再起動が必要です。`
     : '接続先の設定を確認中…（表示が続く場合はサーバーを再起動してください）';
-  document.getElementById('generateButton').disabled = !available;
+  const preprocessingUnavailable = inputImages.length > 0 && synthidCheckbox.checked && !canUseSynthid();
+  document.getElementById('generateButton').disabled = !available || preprocessingUnavailable;
 }
+
+function canUseSynthid() { return synthidAvailability?.available || synthidAvailability?.cachedImages > 0; }
+
+function updateSynthidOption() {
+  synthidCheckbox.disabled = inputImages.length === 0 || (!canUseSynthid() && !synthidCheckbox.checked);
+  document.getElementById('synthidStatus').textContent = !synthidAvailability
+    ? '除去エンジンを確認中…'
+    : !synthidAvailability.available ? (canUseSynthid() ? '保存済みの除去結果だけを再利用できます。新しい画像の除去にはエンジンの準備が必要です。' : synthidAvailability.message)
+    : inputImages.length === 0 ? '入力画像を追加すると選択できます。'
+    : '同じ入力画像の保存済み結果を自動で再利用します。初回はモデルのダウンロードと除去処理を行います。';
+  updateProviderStatus();
+}
+synthidCheckbox.addEventListener('change', updateSynthidOption);
+window.addEventListener('input-images-changed', updateSynthidOption);
+fetch('/synthid/status', { signal: AbortSignal.timeout(65000) })
+  .then(response => { if (!response.ok) throw new Error('status'); return response.json(); })
+  .then(status => { synthidAvailability = status; updateSynthidOption(); })
+  .catch(() => {
+    synthidAvailability = { available: false, message: '除去エンジンを確認できません。サーバー更新後に再読み込みしてください。' };
+    updateSynthidOption();
+  });
 
 // ---- Gemini モデル判定 ----
 const GEMINI_MODELS = new Set([
@@ -196,6 +220,8 @@ function applyEntryParams(entry, { includePrompt = true } = {}) {
   document.getElementById('format').value              = entry.params.format             || '';
   document.getElementById('output_compression').value  = entry.params.output_compression ?? '';
   document.getElementById('moderation').value          = entry.params.moderation         || '';
+  synthidCheckbox.checked = entry.params.remove_synthid === true;
+  updateSynthidOption();
   document.getElementById('gemini_image_size').value          = entry.params.gemini_image_size    || '1K';
   const savedTemp = entry.params.gemini_temperature ?? 1;
   document.getElementById('gemini_temperature').value         = savedTemp;
@@ -273,6 +299,7 @@ document.getElementById('generateForm').addEventListener('submit', async (e) => 
   const tier        = document.getElementById('sizeTier').value;
   const selection = parseModelSelection(modelSelect.value);
   const { model, provider } = selection;
+  const preprocessingParams = inputImages.length && synthidCheckbox.checked ? { remove_synthid: true } : {};
 
   if (isGeminiModel(model)) {
     // Gemini API: size は aspect_ratio + image_size で指定
@@ -281,6 +308,7 @@ document.getElementById('generateForm').addEventListener('submit', async (e) => 
     const geminiTopP          = document.getElementById('gemini_top_p_num').value;
     const geminiThinkingLevel = document.getElementById('gemini_thinking_level').value;
     const params = {
+      ...preprocessingParams,
       provider,
       model,
       n:                    document.getElementById('n').value,
@@ -309,6 +337,7 @@ document.getElementById('generateForm').addEventListener('submit', async (e) => 
   if (!sizeValue) { alert('選択した組み合わせで有効な解像度を計算できませんでした。'); return; }
 
   const params = {
+    ...preprocessingParams,
     provider,
     model,
     n:                  document.getElementById('n').value,
@@ -424,6 +453,7 @@ function handleUpdate(message) {
   const changedIds = new Set();
   switch (message.type) {
     case 'queued':
+    case 'processing':
       entries.set(message.entry.id, message.entry);
       changedIds.add(message.entry.id);
       break;

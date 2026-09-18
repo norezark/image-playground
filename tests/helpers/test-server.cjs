@@ -6,12 +6,37 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 
 // 実際のHTTP/SSE/SQLiteを使い、外部APIだけを置き換えた隔離サーバー。
-async function createTestServer({ cometapi = true, openai = true, gemini = true } = {}) {
+async function createTestServer({ cometapi = true, openai = true, gemini = true, synthid = 'missing' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'image-playground-test-'));
   const project = path.resolve(__dirname, '../..');
   fs.copyFileSync(path.join(project, 'server.js'), path.join(root, 'server.js'));
   fs.cpSync(path.join(project, 'lib'), path.join(root, 'lib'), { recursive: true });
   fs.mkdirSync(path.join(root, 'public'));
+  if (synthid !== 'missing') {
+    fs.mkdirSync(path.join(root, 'scripts'));
+    fs.writeFileSync(path.join(root, 'scripts/synthid-worker.py'), `
+const fs = require('node:fs');
+const path = require('node:path');
+if (process.argv[2] === '--check') {
+  console.log(JSON.stringify({ available: true, version: '0.41.1', device: 'Test GPU' }));
+} else {
+  const mode = ${JSON.stringify(synthid)};
+  fs.appendFileSync('preprocessing.jsonl', JSON.stringify({ input: process.argv[2], output: process.argv[3] }) + '\\n');
+  if (mode === 'fail') { console.error('Test removal failed'); process.exit(1); }
+  if (mode === 'stdout-fail') { console.error('Nonfatal dependency warning'); console.log('Error: model loading failed'); process.exit(1); }
+  if (mode === 'structured-fail') { console.error('Nonfatal dependency warning'); console.log(JSON.stringify({ error: 'Required tokenizer dependency is missing' })); process.exit(1); }
+  if (mode === 'invalid') { fs.writeFileSync(process.argv[3], 'not a PNG'); process.exit(0); }
+  const lock = path.resolve('gpu.lock');
+  fs.writeFileSync(lock, 'busy', { flag: 'wx' });
+  const finish = () => {
+    const input = fs.readFileSync(process.argv[2]);
+    fs.writeFileSync(process.argv[3], Buffer.concat([input, Buffer.from('local-preprocessing')]));
+    fs.unlinkSync(lock);
+  };
+  setTimeout(finish, mode === 'slow' ? 10000 : 100);
+}
+`);
+  }
   for (const name of fs.readdirSync(path.join(project, 'public'))) {
     if (/\.(js|html|css)$/.test(name)) fs.copyFileSync(path.join(project, 'public', name), path.join(root, 'public', name));
   }
@@ -28,7 +53,10 @@ globalThis.fetch = async (url, options) => {
     assert.equal(options.headers.Authorization, expected[host]);
   }
   const model = typeof options.body === 'string' ? JSON.parse(options.body).model : options.body.get('model');
-  fs.appendFileSync('requests.jsonl', JSON.stringify({ url, model }) + '\\n');
+  const inputImages = gemini ? JSON.parse(options.body).contents[0].parts.filter(p => p.inlineData).map(p => p.inlineData.data)
+    : typeof options.body === 'string' ? []
+    : await Promise.all(options.body.getAll('image[]').map(async image => Buffer.from(await image.arrayBuffer()).toString('base64')));
+  fs.appendFileSync('requests.jsonl', JSON.stringify({ url, model, inputImages }) + '\\n');
   const b64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
   return { ok: true, json: async () => gemini
     ? { candidates: [{ content: { parts: [{ inlineData: { data: b64, mimeType: 'image/png' } }] } }] }
@@ -39,6 +67,7 @@ globalThis.fetch = async (url, options) => {
     cwd: root, windowsHide: true,
     env: { ...process.env, NODE_OPTIONS: '', PORT: '0', MAX_RETRIES: '1',
       OPENAI_API_KEY: cometapi ? 'test-comet' : '', COMET_API_KEY: '',
+      SYNTHID_PYTHON: synthid === 'missing' ? path.join(root, 'missing-python') : process.execPath,
       OPENAI_OFFICIAL_API_KEY: openai ? 'test-official' : '', NANO_BANANA_API_KEY: gemini ? 'test-gemini' : '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

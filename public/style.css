@@ -514,6 +514,12 @@ button[type="submit"]:hover {
   background: var(--bg-raised);
 }
 
+.synthid-option { margin-top: 0.7rem; }
+.synthid-option p { margin: 0.2rem 0; font-size: 0.78rem; color: var(--text-muted); }
+.synthid-option:has(input:checked) { border-left: 2px solid var(--accent); padding-left: 0.7rem; }
+.synthid-option input:disabled { cursor: not-allowed; }
+.tile-input-label { font-size: 0.7rem; color: var(--text-muted); align-self: center; }
+
 .model-label {
   flex: 1 1 20rem;
   min-width: 0;

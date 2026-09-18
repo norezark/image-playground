@@ -28,3 +28,7 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.log
+
+# Optional local SynthID runtime, model cache and temporary files
+.synthid/
+__pycache__/

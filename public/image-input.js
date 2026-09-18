@@ -29,6 +29,7 @@ export function renderInputThumbnails() {
       ])
     );
   });
+  window.dispatchEvent(new Event('input-images-changed'));
 }
 
 export function addFiles(files) {

@@ -60,6 +60,8 @@ function buildTileSignature(entry, imgUrl, borderColor) {
     error: entry.error ?? null,
     params: entry.params ?? {},
     inputImages: entry.inputImages ?? [],
+    processedInputImages: entry.processedInputImages ?? [],
+    progress: entry.progress ?? null,
     favoritedImages: entry.favoritedImages ?? [],
     borderColor,
   });
@@ -128,6 +130,8 @@ export function renderHistory(entries, changedIds) {
 
 function statusLabel(entry) {
   switch (entry.status) {
+    case 'preprocessing': return 'SynthID前処理中';
+    case 'generating': return 'Generating';
     case 'completed': return `Completed${entry.retries ? ` (retries: ${entry.retries})` : ''}`;
     case 'retrying':  return `Retrying (${entry.retries})`;
     case 'error':     return `Error (attempts: ${entry.retries || 1})`;
@@ -137,7 +141,7 @@ function statusLabel(entry) {
 
 function renderImageTile(entry, imgUrl, borderColor) {
   const status    = entry.status || (entry.images?.length ? 'completed' : entry.error ? 'error' : 'queued');
-  const isPending = status === 'queued' || status === 'retrying';
+  const isPending = ['queued', 'retrying', 'preprocessing', 'generating'].includes(status);
   const paramsText = Object.entries(displayParams(entry.params))
     .filter(([, v]) => v !== '' && v != null)
     .map(([k, v]) => `${k}: ${v}`)
@@ -172,7 +176,7 @@ function renderImageTile(entry, imgUrl, borderColor) {
   } else if (isPending) {
     const children = [
       el('div', { class: 'spinner' }),
-      el('span', { text: status === 'retrying' ? `リトライ中… (${entry.retries || 0}回目)` : '生成待機中…' }),
+      el('span', { text: status === 'retrying' ? `リトライ中… (${entry.retries || 0}回目)` : entry.progress || '生成待機中…' }),
     ];
     if (status === 'retrying' && entry.error) {
       children.push(el('span', { class: 'tile-error-text', text: entry.error }));
@@ -187,12 +191,21 @@ function renderImageTile(entry, imgUrl, borderColor) {
 
   const inputImagesRow = Array.isArray(entry.inputImages) && entry.inputImages.length
     ? [el('div', { class: 'tile-input-images' },
-        entry.inputImages.map(u => lazyImages.create(u, { class: 'tile-input-thumb', title: 'Input image' })))]
+        entry.inputImages.map(u => lazyImages.create(u, { class: 'tile-input-thumb', title: '元の入力画像',
+          onclick: () => openLightbox(u, entry.inputImages), })))]
     : [];
+  const processedImagesRow = entry.processedInputImages?.length
+    ? [el('div', { class: 'tile-input-images' }, [
+        el('span', { class: 'tile-input-label', text: '前処理後' }),
+        ...entry.processedInputImages.map(u => lazyImages.create(u, { class: 'tile-input-thumb',
+          title: '編集APIへ渡した画像（SynthID除去の成否は未検証）',
+          onclick: () => openLightbox(u, entry.processedInputImages), })),
+      ])] : [];
 
   const tileFooter = el('div', { class: 'tile-footer' }, [
     el('div', { class: 'tile-prompt', text: entry.prompt, title: 'クリックでパラメータ一覧を表示', onclick: () => openParamsPopup(entry) }),
     ...inputImagesRow,
+    ...processedImagesRow,
     el('div', { class: 'tile-meta' }, [
       el('span', { class: 'tile-params', text: paramsText, title: 'クリックでパラメータ一覧を表示', onclick: () => openParamsPopup(entry) }),
       el('span', { class: 'status', text: statusLabel(entry) }),

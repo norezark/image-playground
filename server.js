@@ -39,8 +39,12 @@ if (!providers.gemini) {
 }
 
 // ---- モジュール読み込み（.env ロード後） ----
-const { dbSaveEntry, dbDeleteEntry, dbLoadHistory, _stmtFindIdx, _stmtFavoriteImages } = require('./lib/db');
+const { db, dbSaveEntry, dbDeleteEntry, dbLoadHistory, _stmtFindIdx, _stmtFavoriteImages } = require('./lib/db');
 const { createStartGeneration } = require('./lib/generation');
+const { createSynthidPreprocessor } = require('./lib/synthid');
+const { createImageStore } = require('./lib/image-store');
+const imageStore = createImageStore({ root: __dirname, db });
+const synthid = createSynthidPreprocessor({ imageStore });
 
 // ---- パス定数 ----
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -65,6 +69,7 @@ for (const dir of [IMAGES_DIR, INPUTS_DIR]) {
 }
 
 let history = dbLoadHistory();
+imageStore.setHistory(history, synthid.recipeKey);
 
 // ---- 状態管理 ----
 const clients          = new Set();
@@ -86,6 +91,7 @@ function broadcast(message) {
 const startGeneration = createStartGeneration({
   MAX_RETRIES, IMAGES_DIR, isGeminiModel,
   callGenerations, callEdits, callGemini,
+  preprocessImages: synthid.processImages,
   dbSaveEntry, broadcast, pendingEntries, abortControllers, history,
 });
 
@@ -202,6 +208,20 @@ async function handleGenerate(req, res) {
   let generationParams;
   try {
     generationParams = validateGenerationParams(params);
+    if (generationParams.remove_synthid !== undefined && typeof generationParams.remove_synthid !== 'boolean') {
+      throw new Error('remove_synthid は true / false で指定してください。');
+    }
+    if (generationParams.remove_synthid) {
+      if (!Array.isArray(inputImages) || !inputImages.length) throw new Error('SynthID除去には入力画像が必要です。');
+      if (inputImages.some(img => !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/.test(img?.dataUrl || ''))) {
+        throw new Error('SynthID除去の入力には PNG / JPEG / WebP を指定してください。');
+      }
+      const images = inputImages.map(img => ({ buffer: Buffer.from(img.dataUrl.split(',')[1], 'base64') }));
+      if (!synthid.areAllCached(images)) {
+        const status = await synthid.getStatus();
+        if (!status.available) throw new Error(status.message);
+      }
+    }
   } catch (err) {
     return jsonResponse(res, 400, { error: err.message });
   }
@@ -209,19 +229,16 @@ async function handleGenerate(req, res) {
   const savedInputImagePaths = [];
   const inputImageFiles = [];
   if (Array.isArray(inputImages) && inputImages.length > 0) {
-    const reqId = generateId();
     for (let i = 0; i < inputImages.length; i++) {
       const img = inputImages[i];
       if (!img?.dataUrl) continue;
       const match = img.dataUrl.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
       if (!match) continue;
       const mimeType = match[1];
-      const ext      = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : 'png';
-      const filename = `input-${reqId}-${i}.${ext}`;
       const buffer   = Buffer.from(match[2], 'base64');
-      fs.writeFileSync(path.join(INPUTS_DIR, filename), buffer);
-      savedInputImagePaths.push(`/images/inputs/${filename}`);
-      inputImageFiles.push({ buffer, mimeType, filename });
+      const asset = imageStore.put(buffer, mimeType);
+      savedInputImagePaths.push(asset.url);
+      inputImageFiles.push(asset);
     }
   }
 
@@ -266,6 +283,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (pathname === '/events')                              return await handleEvents(req, res);
     if (pathname === '/history')                             return await handleHistory(req, res);
+    if (pathname === '/synthid/status' && req.method === 'GET') return jsonResponse(res, 200, await synthid.getStatus());
     if (pathname === '/delete'   && req.method === 'POST')  return await handleDelete(req, res);
     if (pathname === '/cancel'   && req.method === 'POST')  return await handleCancel(req, res);
     if (pathname === '/favorite' && req.method === 'POST')  return await handleFavorite(req, res);

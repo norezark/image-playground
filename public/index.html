@@ -25,6 +25,14 @@
             <input type="file" id="inputFileInput" accept="image/*" multiple style="display:none">
           </div>
           <div id="inputThumbnails" class="input-thumbnails"></div>
+          <div class="synthid-option">
+            <label class="checkbox-label" for="remove_synthid">
+              <input type="checkbox" id="remove_synthid" disabled aria-describedby="synthidHint synthidStatus">
+              編集前にSynthIDを除去する（実験的）
+            </label>
+            <p id="synthidHint">入力画像だけをローカルで処理します。細部が変わる場合があり、除去成功の自動判定は行いません。</p>
+            <p id="synthidStatus" role="status">除去エンジンを確認中…</p>
+          </div>
         </div>
         <div class="row">
           <label class="model-label">
