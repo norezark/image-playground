@@ -26,7 +26,8 @@ image-playground/
 ├── server.ps1             # バックグラウンド起動管理スクリプト
 ├── scripts/
 │   ├── setup-synthid.ps1   # 任意のPython/CUDA環境をプロジェクト内に準備
-│   └── synthid-worker.py  # 固定バージョンの除去CLI・入出力検証
+│   ├── synthid-worker.py  # 固定バージョンの除去CLI・入出力検証
+│   └── synthid_qwen.py    # Qwenの量子化・CPU退避
 ├── .synthid/              # 除去用ランタイム・モデル・一時ファイル（Git管理外）
 ├── tests/
 │   ├── image-api.test.cjs  # Images API のリクエスト回帰テスト（外部通信なし）
@@ -88,7 +89,7 @@ image-playground/
 | `GET` | `/` | `public/index.html` を返す |
 | `GET` | `/events` | SSE ストリーム（クライアントはここで状態を受信） |
 | `GET` | `/history` | 履歴全件を JSON で返す |
-| `GET` | `/synthid/status` | エンジンの状態（`available`, `version`, `device`、失敗時は `message`）と現行処理バージョンのキャッシュ件数 `cachedImages`。推論は行わない |
+| `GET` | `/synthid/status` | エンジンの利用可否・バージョン・デバイス・精度設定と、現行処理バージョンのキャッシュ件数を返す |
 | `POST` | `/generate` | 接続先・モデル・キー設定を検証し、HTTP 202 を返して非同期処理。不正な組み合わせ・キー未設定は入力画像保存前にHTTP 400 |
 | `POST` | `/cancel` | 生成キャンセル（`AbortController.abort()` を呼び出す） |
 | `POST` | `/delete` | 履歴エントリをDBから削除し、全 SSE クライアントに通知。画像ファイル・共有キャッシュは保持 |
@@ -128,15 +129,19 @@ queued / preprocessing / generating / retrying → cancelled
 
 `lib/synthid.js` がPythonワーカーを子プロセスとして起動する。ワーカーは `remove-ai-watermarks[qwen-zimage]==0.41.1` を使い、入力と同じ解像度のPNGを返す。
 
+前処理モデルは入力画像の生成元から自動選択する（Microsoft: Chroma、Google: SDXL、その他: Qwen）。
+
 GPU処理はアプリ全体で1枚ずつ実行する。処理直前にもキャッシュを確認し、同じ画像の同時依頼による重複実行を避ける。キャッシュヒットはGPUの待ち行列を通らない。
 
-Chromaには上流のCPUオフロードが適用されないため、ワーカーで `_load_global` を差し替え、Diffusersの `apply_group_offloading` で重みをディスクへ退避する。作業領域 `.synthid/jobs/` の一時ファイルは処理終了時に削除する。
+ChromaとQwenは既定で主要層をNF4量子化し、CPU退避と組み合わせてVRAM使用量を抑える。量子化モデルは `.synthid/models/image-playground/` に保存して再利用する。
+
+作業領域 `.synthid/jobs/` は処理終了時に削除し、失敗時のログは `.synthid/logs/` に残す。
 
 ### 入力画像の共有保存・前処理キャッシュ
 
 元画像と前処理結果はファイル全体のSHA-256で識別し、`public/images/inputs/sha256-<hash>.<ext>` に共有保存する。既存ファイルは元のURLを使い、以前の除去結果は履歴から利用時に登録する。
 
-キャッシュキーは入力ハッシュと処理バージョンの組。処理バージョンはエンジンの固定バージョンとワーカーファイルの内容から作る。結果の存在・ハッシュ・PNG形式を利用時に確認し、欠落・破損時は再処理する。
+キャッシュキーは入力ハッシュと処理バージョンの組。処理バージョンはエンジンのバージョン・前処理コード・精度設定から作る。結果の存在・ハッシュ・PNG形式を利用時に確認し、欠落・破損時は再処理する。
 
 結果は1枚の処理が成功した時点で保存し、履歴はそのURLを参照する。共有ファイルとキャッシュは、後続の処理の失敗・キャンセルや履歴削除でも保持する。
 

@@ -15,7 +15,7 @@ if (-not (Test-Path -LiteralPath $pythonPath)) {
 # Install CUDA wheels explicitly; do not modify any existing Python environment.
 & uv --cache-dir $cachePath pip install --python $pythonPath torch torchvision --index-url https://download.pytorch.org/whl/cu128
 if ($LASTEXITCODE -ne 0) { throw 'Unable to install CUDA PyTorch.' }
-& uv --cache-dir $cachePath pip install --python $pythonPath 'remove-ai-watermarks[qwen-zimage]==0.41.1' 'protobuf>=3.20.3,<7'
+& uv --cache-dir $cachePath pip install --python $pythonPath 'remove-ai-watermarks[qwen-zimage]==0.41.1' 'protobuf>=3.20.3,<7' 'bitsandbytes==0.50.2' 'diffsynth==2.1.7'
 if ($LASTEXITCODE -ne 0) { throw 'Unable to install the SynthID remover.' }
 $env:PYTHON_DOTENV_DISABLED = '1'
 $env:PYTHONUTF8 = '1'

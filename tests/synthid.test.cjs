@@ -129,7 +129,8 @@ for (const [mode, detail] of [
   const [entry] = await completed(app);
   assert.equal(entry.status, 'error');
   assert.ok(entry.error.includes(detail), entry.error);
-  if (mode === 'structured-fail') assert.equal(entry.error, detail);
+  if (mode === 'structured-fail') assert.equal(entry.error.split('\n')[0], detail);
+  assert.match(entry.error, /ログ: .*\.log/);
   assert.deepEqual(app.requests(), []);
 });
 

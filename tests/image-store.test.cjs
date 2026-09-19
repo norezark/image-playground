@@ -144,6 +144,47 @@ test('a successful input stays cached when a later input fails', async t => {
   assert.deepEqual(fs.readdirSync(path.join(ctx.root, '.synthid/jobs')), []);
 });
 
+test('Chroma precision separates result caches and rejects unsupported settings', async t => {
+  const ctx = fixture(t);
+  const image = input('precision');
+  const nf4 = ctx.processor({ chromaPrecision: 'nf4' });
+  const bf16 = ctx.processor({ chromaPrecision: 'bf16' });
+  assert.notEqual(nf4.recipeKey, bf16.recipeKey);
+  await nf4.processImages([image]);
+  assert.equal(bf16.areAllCached([image]), false);
+  await bf16.processImages([image]);
+  assert.equal(nf4.areAllCached([image]), true);
+  assert.equal(ctx.calls(), 2);
+  assert.throws(() => ctx.processor({ chromaPrecision: 'unknown' }), /must be nf4 or bf16/);
+});
+
+test('timeout retains elapsed worker output after cleaning temporary images', async t => {
+  const ctx = fixture(t);
+  fs.writeFileSync(ctx.worker, `console.log('Loading Qwen NF4'); console.error('Running step 1/4'); setInterval(() => {}, 1000);`);
+  await assert.rejects(ctx.processor({ timeoutMs: 1000 }).processImages([input('timeout')]), /タイムアウト[\s\S]*ログ:/);
+  const logs = fs.readdirSync(path.join(ctx.root, '.synthid/logs'));
+  assert.equal(logs.length, 1);
+  const log = fs.readFileSync(path.join(ctx.root, '.synthid/logs', logs[0]), 'utf8');
+  assert.match(log, /\[\d+\.\ds stdout\] Loading Qwen NF4/);
+  assert.match(log, /Running step 1\/4/);
+  assert.deepEqual(fs.readdirSync(path.join(ctx.root, '.synthid/jobs')), []);
+  assert.equal(ctx.processor().areAllCached([input('timeout')]), false);
+});
+
+test('Qwen precision and helper changes invalidate the result cache', async t => {
+  const ctx = fixture(t);
+  const a = input('qwen');
+  fs.writeFileSync(path.join(ctx.root, 'scripts/synthid_qwen.py'), '# first version');
+  const nf4 = ctx.processor({ qwenPrecision: 'nf4' });
+  await nf4.processImages([a]);
+  const fp8 = ctx.processor({ qwenPrecision: 'fp8' });
+  assert.notEqual(nf4.recipeKey, fp8.recipeKey);
+  assert.equal(fp8.areAllCached([a]), false);
+  fs.appendFileSync(path.join(ctx.root, 'scripts/synthid_qwen.py'), '\n# changed');
+  assert.equal(ctx.processor({ qwenPrecision: 'nf4' }).areAllCached([a]), false);
+  assert.throws(() => ctx.processor({ qwenPrecision: 'unknown' }), /must be nf4 or fp8/);
+});
+
 for (const mutation of ['missing', 'corrupted']) test(`${mutation} output is regenerated and never accepted again through previous history`, async t => {
   const ctx = fixture(t);
   const a = input(mutation);
