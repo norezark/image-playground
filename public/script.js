@@ -4,6 +4,7 @@ import { inputImages, renderInputThumbnails, clearInputImages, addInputImage } f
 import { computeResolution, computeGeminiAspectRatio, sizeToSelects, setVisualGroup, updateSizeSelectors } from './size-selector.js';
 import { updatePriceEstimate } from './price-estimate.js';
 import { renderHistory, initHistory, setFavoritesFilter } from './history.js';
+import { createHistoryRenderScheduler } from './history-renderer.js';
 import { initParamsPopup } from './params-popup.js';
 import { postJSON } from './api.js';
 import { parseModelSelection, modelSelectionValue, PROVIDER_LABELS } from './model-selection.js';
@@ -12,6 +13,7 @@ import { parseModelSelection, modelSelectionValue, PROVIDER_LABELS } from './mod
 // ---- 共有状態 ----
 // 生成エントリのマップ。キーは ID、値は { id, prompt, params, images, inputImages, timestamp, retries, status, error }
 const entries = new Map();
+const scheduleHistoryRender = createHistoryRenderScheduler(changedIds => renderHistory(entries, changedIds));
 let providerAvailability = null;
 let synthidAvailability = null;
 const synthidCheckbox = document.getElementById('remove_synthid');
@@ -153,7 +155,7 @@ favFilterBtn.addEventListener('click', () => {
   const enabled = favFilterBtn.classList.toggle('active');
   favFilterBtn.innerHTML = _favFilterHtml(enabled);
   setFavoritesFilter(enabled);
-  renderHistory(entries);
+  scheduleHistoryRender();
 });
 
 // ---- 表示倍率トグル ----
@@ -415,7 +417,7 @@ function subscribe() {
       entries.clear();
       for (const entry of (msg.history || [])) entries.set(entry.id, entry);
       for (const entry of (msg.pending || [])) entries.set(entry.id, entry);
-      renderHistory(entries);
+      scheduleHistoryRender();
       setSyncStatus('online');
     } catch (err) {
       console.error('init メッセージの解析失敗', err);
@@ -500,7 +502,7 @@ function handleUpdate(message) {
     default:
       console.warn('不明なメッセージタイプ', message);
   }
-  renderHistory(entries, changedIds);
+  scheduleHistoryRender(changedIds);
 }
 
 // ---- 初期化 ----

@@ -2,12 +2,15 @@
 
 import { el } from './utils.js';
 import { createLazyImageLoader } from './lazy-images.js';
+import { createHistoryRenderer } from './history-renderer.js';
+import { stabilizeHistoryColumns } from './history-columns.js';
 import { openLightbox } from './lightbox.js';
 import { openParamsPopup } from './params-popup.js';
 import { displayParams } from './model-selection.js';
 import { deleteEntry, cancelEntry, toggleFavorite } from './api.js';
 
 const historyList = document.getElementById('historyList');
+stabilizeHistoryColumns(historyList);
 
 // script.js から loadParams / editWithImage コールバックを受け取る
 let _loadParams = null;
@@ -27,9 +30,15 @@ const BORDER_COLOR_PALETTE = [
 
 const _entryBorderColorMap = new Map();
 let _nextBorderColorIndex = 0;
-let _renderedTiles = new Map();
-let _visibleImages = [];
 const lazyImages = createLazyImageLoader();
+const renderer = createHistoryRenderer({
+  container: historyList,
+  renderTile: (entry, imgUrl) => renderImageTile(entry, imgUrl, getEntryBorderColor(entry.id)),
+  tileSignature: (entry, imgUrl) => buildTileSignature(entry, imgUrl, getEntryBorderColor(entry.id)),
+  releaseTile: node => {
+    for (const img of node.querySelectorAll('img[data-src]')) lazyImages.release(img);
+  },
+});
 
 function getEntryBorderColor(entryId) {
   if (_entryBorderColorMap.has(entryId)) return _entryBorderColorMap.get(entryId);
@@ -71,61 +80,9 @@ function getTileKey(entryId, imgUrl) {
   return `entry-${entryId}-${imgUrl ?? 'placeholder'}`;
 }
 
-// changedIds が渡された場合、そこに含まれないエントリはシグネチャ再計算（JSON.stringify）を
-// スキップして既存タイルをそのまま再利用する。SSE イベントの都度、履歴全件分の
-// シグネチャを再計算すると件数が多いときに負荷が高くなるための最適化。
+// 通常のSSE更新では全件の走査・並べ替え・DOM移動を行わない。
 export function renderHistory(entries, changedIds) {
-  const all = Array.from(entries.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  const nextRenderedTiles = new Map();
-  const visibleImages = [];
-  let cursor = historyList.firstChild;
-
-  const placeTile = (entry, imgUrl, borderColor) => {
-    const key = getTileKey(entry.id, imgUrl);
-    const prevCached = _renderedTiles.get(key);
-    let node;
-
-    if (changedIds && !changedIds.has(entry.id) && prevCached) {
-      node = prevCached.node;
-      nextRenderedTiles.set(key, prevCached);
-    } else {
-      const signature = buildTileSignature(entry, imgUrl, borderColor);
-      node = prevCached && prevCached.signature === signature
-        ? prevCached.node
-        : renderImageTile(entry, imgUrl, borderColor);
-      nextRenderedTiles.set(key, { signature, node });
-    }
-
-    if (node === cursor) {
-      cursor = cursor.nextSibling;
-      return;
-    }
-    historyList.insertBefore(node, cursor);
-  };
-
-  for (const entry of all) {
-    if (entry.images?.length) {
-      const borderColor = getEntryBorderColor(entry.id);
-      entry.images.forEach(imgUrl => {
-        if (_showFavoritesOnly && !entry.favoritedImages?.includes(imgUrl)) return;
-        visibleImages.push(imgUrl);
-        placeTile(entry, imgUrl, borderColor);
-      });
-    } else {
-      if (!_showFavoritesOnly) placeTile(entry, null, getEntryBorderColor(entry.id));
-    }
-  }
-
-  while (cursor) {
-    const next = cursor.nextSibling;
-    // 画面外のまま削除・差し替えされた画像を observer に残さない。
-    for (const img of cursor.querySelectorAll('img[data-src]')) lazyImages.release(img);
-    historyList.removeChild(cursor);
-    cursor = next;
-  }
-
-  _renderedTiles = nextRenderedTiles;
-  _visibleImages = visibleImages;
+  renderer.render(entries, changedIds, _showFavoritesOnly);
 }
 
 function statusLabel(entry) {
@@ -151,7 +108,7 @@ function renderImageTile(entry, imgUrl, borderColor) {
   const tileImage = el('div', { class: 'tile-image' });
   if (imgUrl) {
     const historyImg = lazyImages.create(imgUrl, {
-      onclick: () => openLightbox(imgUrl, _visibleImages),
+      onclick: () => openLightbox(imgUrl, renderer.getVisibleImages()),
     });
     tileImage.appendChild(historyImg);
     tileImage.style.cursor = 'zoom-in';
@@ -221,7 +178,7 @@ function renderImageTile(entry, imgUrl, borderColor) {
   const tile = el('div', {
     class: `history-item${isPending ? ' is-pending' : ''}`,
     id: getTileKey(entry.id, imgUrl),
-  }, [tileImage, tileFooter]);
+  }, [el('div', { class: 'tile-content' }, [tileImage, tileFooter])]);
 
   tile.style.setProperty('--entry-border-color', borderColor);
   return tile;
