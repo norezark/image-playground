@@ -6,7 +6,8 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 
 // 実際のHTTP/SSE/SQLiteを使い、外部APIだけを置き換えた隔離サーバー。
-async function createTestServer({ cometapi = true, openai = true, gemini = true, synthid = 'missing' } = {}) {
+async function createTestServer({ cometapi = true, openai = true, gemini = true, synthid = 'missing',
+  maxRetries = 1, apiFailures = 0, apiFailureStatus = 400, pushStatus = 201, tls } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'image-playground-test-'));
   const project = path.resolve(__dirname, '../..');
   fs.copyFileSync(path.join(project, 'server.js'), path.join(root, 'server.js'));
@@ -38,13 +39,20 @@ if (process.argv[2] === '--check') {
 `);
   }
   for (const name of fs.readdirSync(path.join(project, 'public'))) {
-    if (/\.(js|html|css)$/.test(name)) fs.copyFileSync(path.join(project, 'public', name), path.join(root, 'public', name));
+    if (/\.(js|html|css|webmanifest)$/.test(name)) fs.copyFileSync(path.join(project, 'public', name), path.join(root, 'public', name));
   }
+  fs.cpSync(path.join(project, 'public/icons'), path.join(root, 'public/icons'), { recursive: true });
   fs.writeFileSync(path.join(root, 'mock-api.cjs'), `
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
+let apiCalls = 0;
 globalThis.fetch = async (url, options) => {
   const host = new URL(url).hostname;
+  if (host === 'fcm.googleapis.com') {
+    fs.appendFileSync('pushes.jsonl', JSON.stringify({ url, headers: options.headers,
+      body: Buffer.from(options.body).toString('base64') }) + '\\n');
+    return new Response('', { status: ${JSON.stringify(pushStatus)} });
+  }
   const expected = { 'api.openai.com': 'Bearer test-official', 'api.cometapi.com': 'Bearer test-comet' };
   const gemini = host === 'generativelanguage.googleapis.com';
   if (gemini) assert.equal(options.headers['x-goog-api-key'], 'test-gemini');
@@ -53,25 +61,40 @@ globalThis.fetch = async (url, options) => {
     assert.equal(options.headers.Authorization, expected[host]);
   }
   const model = typeof options.body === 'string' ? JSON.parse(options.body).model : options.body.get('model');
+  const fields = typeof options.body === 'string' ? JSON.parse(options.body)
+    : Object.fromEntries([...options.body.entries()].filter(([, value]) => typeof value === 'string'));
   const inputImages = gemini ? JSON.parse(options.body).contents[0].parts.filter(p => p.inlineData).map(p => p.inlineData.data)
     : typeof options.body === 'string' ? []
     : await Promise.all(options.body.getAll('image[]').map(async image => Buffer.from(await image.arrayBuffer()).toString('base64')));
-  fs.appendFileSync('requests.jsonl', JSON.stringify({ url, model, inputImages }) + '\\n');
+  const markup = typeof options.body === 'string' ? null : options.body.get('markup');
+  fs.appendFileSync('requests.jsonl', JSON.stringify({ url, model, inputImages, fields,
+    markup: markup ? Buffer.from(await markup.arrayBuffer()).toString('base64') : null }) + '\\n');
+  if (apiCalls++ < ${JSON.stringify(apiFailures)}) return { ok: false, status: ${JSON.stringify(apiFailureStatus)}, statusText: 'Mock provider error',
+    text: async () => JSON.stringify({ error: { message: 'Mock upstream failure' } }) };
   const b64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const format = fields.output_format || fields.format || 'png';
+  const result = format === 'svg' ? Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" fill="#18294b"/><circle cx="256" cy="220" r="120" fill="#58a6ff"/><text x="256" y="430" text-anchor="middle" fill="white" font-size="48">SVG preview</text></svg>').toString('base64')
+    : format === 'gif' ? 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' : b64;
   return { ok: true, json: async () => gemini
     ? { candidates: [{ content: { parts: [{ inlineData: { data: b64, mimeType: 'image/png' } }] } }] }
-    : { data: [{ b64_json: b64 }] } };
+    : { output_format: format, data: [{ b64_json: result }],
+      usage: { input_tokens: 13, input_tokens_details: { text_tokens: 13, image_tokens: 0 }, output_tokens: 823, total_tokens: 836 },
+      ...(format === 'svg' ? { svg_usage: { model: 'test-svg-author', input_tokens: 10, output_tokens: 20, reasoning_tokens: 0, total_tokens: 30 } } : {}) } };
 };
 `);
   const child = spawn(process.execPath, ['--require', './mock-api.cjs', 'server.js'], {
     cwd: root, windowsHide: true,
-    env: { ...process.env, NODE_OPTIONS: '', PORT: '0', MAX_RETRIES: '1',
+    env: { ...process.env, NODE_OPTIONS: '', PORT: '0', MAX_RETRIES: String(maxRetries),
+      HTTPS_CERT_FILE: tls?.certFile || '', HTTPS_KEY_FILE: tls?.keyFile || '', WEB_PUSH_SUBJECT: 'mailto:test@example.com',
+      HTTPS_CA_CERT_FILE: tls?.caFile || path.join(root, 'missing-ca.pem'), CERT_HTTP_PORT: tls?.certificatePort ?? '0',
       OPENAI_API_KEY: cometapi ? 'test-comet' : '', COMET_API_KEY: '',
       SYNTHID_PYTHON: synthid === 'missing' ? path.join(root, 'missing-python') : process.execPath,
       OPENAI_OFFICIAL_API_KEY: openai ? 'test-official' : '', NANO_BANANA_API_KEY: gemini ? 'test-gemini' : '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
   child.stderr.on('data', chunk => { output += chunk; });
   const close = async () => {
     if (child.exitCode === null && child.signalCode === null) {
@@ -92,11 +115,16 @@ globalThis.fetch = async (url, options) => {
       child.once('exit', () => { clearTimeout(timeout); reject(new Error('Test server exited: ' + output)); });
       child.stdout.on('data', chunk => {
         output += chunk;
-        const match = output.match(/http:\/\/localhost:(\d+)/);
-        if (match) { clearTimeout(timeout); resolve('http://localhost:' + match[1]); }
+        const match = output.match(/サーバー起動: (https?):\/\/localhost:(\d+)/);
+        const waitingForCertificate = tls?.certFile && tls.certificatePort !== 'off' && !output.includes('証明書HTTP:');
+        if (match && !waitingForCertificate) { clearTimeout(timeout); resolve(match[1] + '://localhost:' + match[2]); }
       });
     });
-    return { url, root, close, requests: () => {
+    const certificateUrl = output.match(/証明書HTTP: (http:\/\/localhost:\d+\/cert\/rootCA\.cer)/)?.[1];
+    return { url, certificateUrl, root, close, pushes: () => {
+      const log = path.join(root, 'pushes.jsonl');
+      return fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) : [];
+    }, requests: () => {
       const log = path.join(root, 'requests.jsonl');
       return fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) : [];
     } };

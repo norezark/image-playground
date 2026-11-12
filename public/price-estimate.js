@@ -1,8 +1,8 @@
 // price-estimate.js – 料金見積もり
 
 import { computeResolution } from './size-selector.js';
-import { estimateImage25Price } from './image-price.js';
-import { parseModelSelection, PROVIDER_LABELS } from './model-selection.js';
+import { estimateImagePrice } from './image-price.js';
+import { parseModelSelection, PROVIDER_LABELS, getImageModelCapabilities } from './model-selection.js';
 
 const GEMINI_MODELS = new Set([
   'gemini-2.5-flash-image',
@@ -52,7 +52,7 @@ const PRICE_BASE_PIXELS_SQUARE = 1024 * 1024;
 const PRICE_BASE_PIXELS_NON_SQ = 1024 * 1536;
 
 function computeEstimatedPrice() {
-  const selection = parseModelSelection(document.getElementById('model').value);
+  const selection = { ...parseModelSelection(document.getElementById('model').value), format: document.getElementById('format').value };
   const { model } = selection;
   const provider = PROVIDER_LABELS[selection.provider];
   const discount = selection.provider === 'openai' ? 1 : COMETAPI_DISCOUNT;
@@ -81,12 +81,15 @@ function computeEstimatedPrice() {
 
   if (model === 'gpt-image-2-all') return { perImage: 0.04, n, provider, isApprox: false };
 
-  if (/^gpt-image-2\.5-(flare|sunburst)(-2026-09-08)?$/.test(model)) {
+  const caps = getImageModelCapabilities(model);
+  if (caps.extendedQuality) {
+    if (selection.format === 'gif') return { n, provider, unknown: true,
+      reason: 'GIFの事前見積もりは未対応（フレーム・入力に応じて課金）' };
     const size = computeResolution(orientation, ratio, tier, selection);
-    const estimate = size && estimateImage25Price(size, quality, selection.provider);
+    const estimate = size && estimateImagePrice(size, quality, selection.provider, caps.image26 ? '2.6' : '2.5');
     if (!estimate) return { n, provider, unknown: true,
       reason: '選択したサイズ・品質では見積もりできません' };
-    return { ...estimate, n, provider, image25: true, outputRate: 30 * discount };
+    return { ...estimate, n, provider, imageOutput: true, svg: selection.format === 'svg', outputRate: 30 * discount };
   }
 
   const modelPrices = OFFICIAL_PRICE_TABLE[model];
@@ -125,7 +128,7 @@ export function updatePriceEstimate() {
     priceEl.textContent = `推定料金 (${result.provider}): ${result.reason || 'preview モデルのため料金未確認'}`;
     return;
   }
-  if (result.image25) {
+  if (result.imageOutput) {
     const amount = (count) => {
       const low = `$${(result.minPerImage * count).toFixed(5)}`;
       const high = `$${(result.maxPerImage * count).toFixed(5)}`;
@@ -134,6 +137,7 @@ export function updatePriceEstimate() {
     let text = `推定料金 (${result.provider}): 約${amount(1)} / 枚`;
     if (result.n > 1) text += ` × ${result.n} = 約${amount(result.n)}`;
     text += '（出力分・入力料金別）';
+    if (result.svg) text += ' ＋SVG作成モデルの料金';
     if (result.assumptions.length) text += ` ${result.assumptions.join(' / ')}`;
     priceEl.textContent = text;
     priceEl.title = `OpenAI公式計算器の出力トークン数 × $${result.outputRate} / 100万トークン${result.outputRate === 24 ? '（CometAPI標準20%割引）' : '（OpenAI公式）'}。入力テキスト・入力画像・リトライの料金は別途かかります。実請求額は契約・使用量により異なります。`;
@@ -150,3 +154,4 @@ document.getElementById('model').addEventListener('change', updatePriceEstimate)
 document.getElementById('quality').addEventListener('change', updatePriceEstimate);
 document.getElementById('n').addEventListener('input', updatePriceEstimate);
 document.getElementById('gemini_image_size').addEventListener('change', updatePriceEstimate);
+document.getElementById('format').addEventListener('change', updatePriceEstimate);

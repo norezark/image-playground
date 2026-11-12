@@ -4,12 +4,26 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Image Generation Playground</title>
+  <meta name="theme-color" content="#161b22">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="toolbar" class="toolbar">
     <span id="syncStatus" class="sync-status sync-connecting">接続中…</span>
     <span id="syncClock" class="sync-clock">--:--:--</span>
+    <details class="notification-settings">
+      <summary>通知 <span id="pushState">確認中</span></summary>
+      <div class="notification-panel">
+        <p>生成完了・リトライ上限での停止を、この端末にプッシュ通知します。受け取りたい端末ごとに有効にしてください。</p>
+        <p id="pushStatus" role="status">通知の設定を確認しています…</p>
+        <div class="notification-actions">
+          <button id="pushToggle" type="button" disabled>この端末の通知を有効にする</button>
+          <button id="pushTest" type="button" hidden>テスト通知</button>
+        </div>
+      </div>
+    </details>
   </div>
   <main>
     <section id="controls">
@@ -40,6 +54,8 @@
             <select name="model" id="model" aria-describedby="providerStatus">
               <optgroup label="CometAPI">
                 <option value="gpt-image-2-all">gpt-image-2-all (CometAPI)</option>
+                <option value="gpt-image-2.6-flare">gpt-image-2.6-flare (CometAPI)</option>
+                <option value="gpt-image-2.6-sunburst">gpt-image-2.6-sunburst (CometAPI)</option>
                 <option value="gpt-image-2.5-flare">gpt-image-2.5-flare (CometAPI)</option>
                 <option value="gpt-image-2.5-sunburst">gpt-image-2.5-sunburst (CometAPI)</option>
                 <option value="gpt-image-2">gpt-image-2 (CometAPI)</option>
@@ -48,6 +64,8 @@
                 <option value="gpt-image-1-mini">gpt-image-1-mini (CometAPI)</option>
               </optgroup>
               <optgroup label="OpenAI公式">
+                <option value="openai:gpt-image-2.6-flare">gpt-image-2.6-flare (OpenAI公式)</option>
+                <option value="openai:gpt-image-2.6-sunburst">gpt-image-2.6-sunburst (OpenAI公式)</option>
                 <option value="openai:gpt-image-2.5-flare">gpt-image-2.5-flare (OpenAI公式)</option>
                 <option value="openai:gpt-image-2.5-sunburst">gpt-image-2.5-sunburst (OpenAI公式)</option>
                 <option value="openai:gpt-image-2">gpt-image-2 (OpenAI公式)</option>
@@ -124,6 +142,8 @@
           <label id="sizeTierLabel">
             大きさ
             <select id="sizeTier">
+              <option value="GIF256" data-gif-only hidden disabled>256px</option>
+              <option value="GIF512" data-gif-only hidden disabled>512px</option>
               <option value="S" selected>S</option>
               <option value="M">M</option>
               <option value="L">L</option>
@@ -187,9 +207,19 @@
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
-              <option value="xhigh" data-image-25-only hidden disabled>Extra high</option>
-              <option value="max" data-image-25-only hidden disabled>Max</option>
+              <option value="xhigh" data-extended-quality hidden disabled>Extra high</option>
+              <option value="max" data-extended-quality hidden disabled>Max</option>
             </select>
+          </label>
+          <label id="complexityLabel" style="display:none">
+            Complexity
+            <select id="complexity" aria-describedby="complexityHint">
+              <option value="">Default (High)</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+            <small id="complexityHint">生成前の検討量。単純な編集はLow、複雑な構図はHigh。</small>
           </label>
           <label id="inputFidelityLabel">
             Input fidelity
@@ -204,6 +234,8 @@
             <select name="background" id="background">
               <option value="">Default</option>
               <option value="opaque">Opaque</option>
+              <option value="auto" data-transparency hidden disabled>Auto</option>
+              <option value="transparent" data-transparency hidden disabled>Transparent</option>
             </select>
           </label>
           <label id="formatLabel">
@@ -212,6 +244,8 @@
               <option value="">Default (png)</option>
               <option value="jpeg">JPEG</option>
               <option value="webp">WebP</option>
+              <option value="gif" data-image-26-only hidden disabled>Animated GIF</option>
+              <option value="svg" data-image-26-only hidden disabled>SVG</option>
             </select>
           </label>
           <label id="compressionLabel">
@@ -225,7 +259,33 @@
               <option value="low">Low</option>
             </select>
           </label>
+          <label id="frameCountLabel" style="display:none">
+            GIF frames
+            <input id="frame_count" type="number" min="2" max="16" step="1" value="9">
+          </label>
+          <label id="frameDurationLabel" style="display:none">
+            Frame duration (ms)
+            <input id="frame_duration_ms" type="number" min="20" max="2000" step="10" value="200">
+          </label>
+          <label id="svgModelLabel" style="display:none">
+            SVG author model (optional)
+            <input id="svg_model" type="text" placeholder="Default" aria-describedby="formatHint">
+          </label>
+          <label id="svgReasoningLabel" style="display:none">
+            SVG author reasoning
+            <select id="svg_reasoning">
+              <option value="">Default</option>
+              <option value="none">None</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+              <option value="max">Max</option>
+            </select>
+          </label>
         </div>
+        <p id="formatHint" class="format-hint" hidden></p>
         <p id="priceEstimate" class="price-estimate"></p>
         <button id="generateButton" type="submit" title="Generate (Ctrl+Enter)" disabled>Generate</button>
       </form>

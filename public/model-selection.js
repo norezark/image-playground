@@ -1,4 +1,6 @@
 // 同じモデルでも接続先を識別する。既存の選択値・provider のない履歴は維持する。
+import './image-models.js';
+export const { getImageModelCapabilities, validateImageOptions } = globalThis.ImagePlaygroundModels;
 export const PROVIDER_LABELS = { cometapi: 'CometAPI', openai: 'OpenAI公式', gemini: 'Gemini API' };
 
 export function parseModelSelection(value) {

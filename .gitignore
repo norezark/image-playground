@@ -3,6 +3,10 @@
 
 # サーバーの実行時ファイル
 server.pid
+certs/
+*.key.pem
+*-key.pem
+.env.https-*
 
 # 生成履歴（プロンプト内容を含むためコミット対象外）
 history.db
@@ -16,6 +20,8 @@ public/images/*.png
 public/images/*.jpg
 public/images/*.jpeg
 public/images/*.webp
+public/images/*.gif
+public/images/*.svg
 public/images/inputs/*.png
 public/images/inputs/*.jpg
 public/images/inputs/*.jpeg

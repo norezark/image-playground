@@ -43,6 +43,25 @@ body {
   white-space: nowrap;
 }
 
+.notification-settings { margin-left: auto; position: relative; font-size: 0.78rem; }
+.notification-settings summary { cursor: pointer; padding: 0.25rem 0.45rem; white-space: nowrap; }
+#pushState { color: var(--text-muted); margin-left: 0.3rem; }
+.notification-panel {
+  position: absolute; right: 0; top: calc(100% + 0.65rem); width: min(340px, calc(100vw - 3rem));
+  box-sizing: border-box; padding: 0.85rem; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-surface); box-shadow: 0 8px 24px #0006; line-height: 1.6;
+}
+.notification-panel p { margin: 0 0 0.7rem; }
+#pushStatus { color: var(--text-muted); }
+.notification-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.notification-actions button {
+  width: auto; padding: 0.4rem 0.65rem; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--bg-raised); color: var(--text); font-size: inherit; cursor: pointer;
+}
+.notification-actions button:hover { border-color: var(--accent); }
+.notification-actions button:disabled { opacity: 0.5; cursor: default; }
+.notification-target { outline: 2px solid var(--accent); outline-offset: 3px; }
+
 .sync-clock {
   font-size: 0.78rem;
   color: var(--text-muted);
@@ -951,3 +970,25 @@ button[type="submit"]:disabled {
 .params-popup-btn:hover {
   background: rgba(88, 166, 255, 0.12);
 }
+
+.format-hint, #complexityHint { color: var(--text-muted); font-size: 0.78rem; line-height: 1.5; }
+.input-thumb .input-markup-overlay { position: absolute; inset: 0; pointer-events: none; object-fit: cover; }
+.input-thumb:has(.markup-button) { margin-bottom: 1.8rem; overflow: visible; }
+.input-thumb img { border-radius: 4px; }
+.markup-button { position: absolute; top: calc(100% + 3px); left: 0; width: 100%; white-space: nowrap; padding: 0.2rem 0; font-size: 0.65rem; }
+.markup-dialog { background: var(--bg-surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; width: min(900px, 92vw); max-height: 92vh; padding: 1rem; }
+.markup-dialog::backdrop { background: rgba(0, 0, 0, 0.75); }
+.markup-dialog h3 { margin: 0 0 0.5rem; }
+.markup-dialog p { color: var(--text-muted); font-size: 0.85rem; }
+.markup-tools, .markup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.75rem 0; }
+.markup-tools select, .markup-tools input { width: auto; }
+.markup-tools input[type="color"] { padding: 2px; width: 42px; height: 34px; }
+.markup-tools input[type="range"] { width: 110px; }
+.markup-stage { position: relative; margin: auto; width: fit-content; max-width: 100%; line-height: 0; background: #31353b; }
+.markup-stage img { display: block; max-width: 100%; max-height: 60vh; width: auto; height: auto; }
+.markup-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.markup-actions { justify-content: flex-end; }
+.markup-dialog button, .markup-button { border: 1px solid var(--border); border-radius: 5px; background: var(--bg-raised); color: var(--text); cursor: pointer; }
+.markup-dialog button { padding: 0.45rem 0.65rem; }
+.markup-dialog button:disabled { opacity: 0.45; cursor: default; }
+.markup-dialog .markup-save { background: var(--accent); color: var(--bg-base); border-color: var(--accent); }

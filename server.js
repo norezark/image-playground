@@ -1,5 +1,6 @@
 ﻿const http   = require('http');
 const fs     = require('fs');
+const https  = require('https');
 const path   = require('path');
 const crypto = require('crypto');
 
@@ -23,6 +24,8 @@ const MAX_RETRIES = Number(process.env.MAX_RETRIES) || 10;
 
 const { isGeminiModel, callGenerations, callEdits, callGemini,
   getProviderAvailability, validateGenerationParams } = require('./lib/api');
+const { validateMarkupImage } = require('./lib/image-metadata');
+const { getImageModelCapabilities } = require('./public/image-models');
 const providers = getProviderAvailability();
 if (!Object.values(providers).some(Boolean)) {
   console.error('エラー: COMET_API_KEY（旧 OPENAI_API_KEY）、OPENAI_OFFICIAL_API_KEY、NANO_BANANA_API_KEY のいずれかを設定してください。');
@@ -43,23 +46,29 @@ const { db, dbSaveEntry, dbDeleteEntry, dbLoadHistory, _stmtFindIdx, _stmtFavori
 const { createStartGeneration } = require('./lib/generation');
 const { createSynthidPreprocessor } = require('./lib/synthid');
 const { createImageStore } = require('./lib/image-store');
+const { createPushNotifications } = require('./lib/web-push');
 const imageStore = createImageStore({ root: __dirname, db });
 const synthid = createSynthidPreprocessor({ imageStore });
+const pushNotifications = createPushNotifications({ db });
 
 // ---- パス定数 ----
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const IMAGES_DIR = path.join(PUBLIC_DIR, 'images');
 const INPUTS_DIR = path.join(IMAGES_DIR, 'inputs');
+const CA_CERT_FILE = path.resolve(__dirname, process.env.HTTPS_CA_CERT_FILE || 'certs/rootCA.pem');
+const CERTIFICATE_PATH = '/cert/rootCA.cer';
 
 const CONTENT_TYPES = {
   '.html': 'text/html',
   '.js':   'text/javascript',
   '.css':  'text/css',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
   '.png':  'image/png',
   '.jpg':  'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
+  '.gif':  'image/gif',
   '.svg':  'image/svg+xml',
 };
 
@@ -93,6 +102,7 @@ const startGeneration = createStartGeneration({
   callGenerations, callEdits, callGemini,
   preprocessImages: synthid.processImages,
   dbSaveEntry, broadcast, pendingEntries, abortControllers, history,
+  notifyGeneration: pushNotifications.notifyGeneration,
 });
 
 function sendInitialState(res) {
@@ -105,10 +115,15 @@ function sendInitialState(res) {
   res.write(`event: init\ndata: ${data}\n\n`);
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = Infinity) {
   return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', chunk => { body += chunk; });
+    let bytes = 0;
+    req.on('data', chunk => {
+      bytes += chunk.length;
+      if (bytes > maxBytes) { reject(new Error('リクエストが大きすぎます。')); return; }
+      body += chunk;
+    });
     req.on('end', () => resolve(body));
     req.on('error', reject);
   });
@@ -124,6 +139,64 @@ function jsonResponse(res, status, payload) {
 }
 
 // ---- ルートハンドラ ----
+async function handleCertificateDownload(req, res) {
+  if (!['GET', 'HEAD'].includes(req.method)) {
+    res.setHeader('Allow', 'GET, HEAD');
+    return jsonResponse(res, 405, { error: 'GET または HEAD を使用してください。' });
+  }
+  let certificate;
+  try {
+    // Extract DER from X.509 rather than serving file bytes: a PEM bundle can contain private keys.
+    const publicCertificate = new crypto.X509Certificate(await fs.promises.readFile(CA_CERT_FILE));
+    if (!publicCertificate.ca) throw new Error('A CA certificate is required');
+    certificate = publicCertificate.raw;
+  } catch (error) {
+    return jsonResponse(res, error.code === 'ENOENT' ? 404 : 503, { error: 'ダウンロード用の公開CA証明書が見つからないか、読み込めません。' });
+  }
+  res.writeHead(200, {
+    'Content-Type': 'application/x-x509-ca-cert',
+    'Content-Disposition': 'attachment; filename="rootCA.cer"',
+    'Content-Length': certificate.length,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.end(req.method === 'HEAD' ? undefined : certificate);
+}
+
+async function handlePush(req, res, pathname) {
+  // These endpoints store capability URLs; never expose them via the app's legacy wildcard CORS.
+  res.removeHeader('Access-Control-Allow-Origin');
+  res.setHeader('Cache-Control', 'no-store');
+  if (req.method === 'GET' && pathname === '/push/config') {
+    return jsonResponse(res, 200, { publicKey: pushNotifications.publicKey() });
+  }
+  if (req.method !== 'POST') return jsonResponse(res, 405, { error: 'POST を使用してください。' });
+  let origin;
+  try {
+    origin = new URL(req.headers.origin);
+    if (origin.origin !== req.headers.origin || origin.host !== req.headers.host
+      || !['http:', 'https:'].includes(origin.protocol) || req.headers['sec-fetch-site'] === 'cross-site') throw new Error();
+  } catch { return jsonResponse(res, 403, { error: 'アプリと同じURLから通知を設定してください。' }); }
+  if (!['/push/subscribe', '/push/unsubscribe', '/push/test'].includes(pathname)) {
+    return jsonResponse(res, 404, { error: '通知の操作が見つかりません。' });
+  }
+  let data;
+  try { data = parseJSON(await readBody(req, 16384)); }
+  catch { return jsonResponse(res, 413, { error: '通知の設定が大きすぎます。' }); }
+  if (!data || typeof data !== 'object') return jsonResponse(res, 400, { error: 'JSON が不正です。' });
+  try {
+    if (pathname === '/push/subscribe') pushNotifications.subscribe(data.subscription, origin.origin);
+    else if (pathname === '/push/unsubscribe') pushNotifications.unsubscribe(data.endpoint, origin.origin);
+    else {
+      if (typeof data.endpoint !== 'string' || data.endpoint.length > 4096) throw new Error('通知先が不正です。');
+      await pushNotifications.test(data.endpoint, origin.origin);
+    }
+    return jsonResponse(res, 200, { status: 'ok' });
+  } catch (err) {
+    return jsonResponse(res, pathname === '/push/test' ? 502 : 400, { error: err.message });
+  }
+}
+
 async function handleEvents(req, res) {
   res.writeHead(200, {
     'Content-Type':  'text/event-stream',
@@ -203,11 +276,29 @@ async function handleCancel(req, res) {
 async function handleGenerate(req, res) {
   const data = parseJSON(await readBody(req));
   if (!data) return jsonResponse(res, 400, { error: 'JSON が不正です' });
-  const { prompt, params, inputImages } = data;
+  const { prompt, params, inputImages, markupImage } = data;
   if (!prompt || typeof prompt !== 'string') return jsonResponse(res, 400, { error: 'prompt が必要です' });
   let generationParams;
+  let markupFile;
   try {
-    generationParams = validateGenerationParams(params);
+    generationParams = validateGenerationParams(params, { editing: !!inputImages?.length, hasMarkup: !!markupImage });
+    if (getImageModelCapabilities(generationParams.model).image26 && inputImages !== undefined) {
+      if (!Array.isArray(inputImages) || inputImages.length > 16) throw new Error('入力画像は16枚以下の配列で指定してください。');
+      for (const image of inputImages) {
+        if (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/.test(image?.dataUrl || '')) {
+          throw new Error('入力画像にはPNG / JPEG / WebPを指定してください。GIF / SVGはPNGに変換してください。');
+        }
+        if (Buffer.from(image.dataUrl.split(',')[1], 'base64').length > 50 * 1024 * 1024) throw new Error('入力画像は1枚50MB以下にしてください。');
+      }
+    }
+    if (markupImage) {
+      const firstData = inputImages?.[0]?.dataUrl;
+      if (typeof firstData !== 'string' || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/.test(firstData)) {
+        throw new Error('描き込みの対象にはPNG / JPEG / WebPの入力画像が必要です。');
+      }
+      markupFile = validateMarkupImage(markupImage, { buffer: Buffer.from(firstData.split(',')[1], 'base64') });
+    }
+    if (isGeminiModel(generationParams.model) && markupImage) throw new Error('このモデルでは描き込みを利用できません。');
     if (generationParams.remove_synthid !== undefined && typeof generationParams.remove_synthid !== 'boolean') {
       throw new Error('remove_synthid は true / false で指定してください。');
     }
@@ -225,6 +316,8 @@ async function handleGenerate(req, res) {
   } catch (err) {
     return jsonResponse(res, 400, { error: err.message });
   }
+
+  if (markupFile) markupFile = imageStore.put(markupFile.buffer, markupFile.mimeType);
 
   const savedInputImagePaths = [];
   const inputImageFiles = [];
@@ -251,13 +344,14 @@ async function handleGenerate(req, res) {
     params:      generationParams,
     images:      [],
     inputImages: savedInputImagePaths.length ? savedInputImagePaths : undefined,
+    markupImage: markupFile?.url,
     timestamp:   new Date().toISOString(),
     retries:     0,
     status:      'queued',
   };
   pendingEntries.set(id, entry);
   broadcast({ type: 'queued', entry });
-  startGeneration(id, entry, prompt, generationParams, inputImageFiles);
+  startGeneration(id, entry, prompt, generationParams, inputImageFiles, markupFile);
 }
 
 async function handleStaticFile(pathname, res) {
@@ -265,22 +359,30 @@ async function handleStaticFile(pathname, res) {
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end('Not found'); return; }
     const contentType = CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': contentType });
+    const headers = { 'Content-Type': contentType, 'X-Content-Type-Options': 'nosniff' };
+    if (pathname === '/sw.js' || pathname === '/manifest.webmanifest') headers['Cache-Control'] = 'no-cache';
+    if (contentType === 'image/svg+xml') headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+    res.writeHead(200, headers);
     res.end(data);
   });
 }
 
-// ---- HTTP サーバー ----
-const server = http.createServer(async (req, res) => {
+// ---- HTTP / HTTPS サーバー ----
+const handleRequest = async (req, res) => {
   const { pathname } = new URL(req.url, 'http://localhost');
 
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+  if (req.method === 'OPTIONS') {
+    if (pathname.startsWith('/push/')) { res.removeHeader('Access-Control-Allow-Origin'); res.writeHead(403); res.end(); return; }
+    res.writeHead(204); res.end(); return;
+  }
 
   try {
+    if (pathname === CERTIFICATE_PATH) return await handleCertificateDownload(req, res);
+    if (pathname.startsWith('/push/')) return await handlePush(req, res, pathname);
     if (pathname === '/events')                              return await handleEvents(req, res);
     if (pathname === '/history')                             return await handleHistory(req, res);
     if (pathname === '/synthid/status' && req.method === 'GET') return jsonResponse(res, 200, await synthid.getStatus());
@@ -293,8 +395,48 @@ const server = http.createServer(async (req, res) => {
     console.error('リクエスト処理エラー:', err);
     if (!res.headersSent) jsonResponse(res, 500, { error: '内部サーバーエラー' });
   }
-});
+};
 
-server.listen(PORT, () => {
-  console.log(`サーバー起動: http://localhost:${server.address().port}`);
+const certFile = process.env.HTTPS_CERT_FILE;
+const keyFile = process.env.HTTPS_KEY_FILE;
+if (!!certFile !== !!keyFile) throw new Error('HTTPS_CERT_FILE と HTTPS_KEY_FILE は両方設定してください。');
+const defaultCertificatePort = Number(PORT) > 0 && Number(PORT) < 65535 ? Number(PORT) + 1 : 8001;
+const certificatePortSetting = process.env.CERT_HTTP_PORT || String(defaultCertificatePort);
+const certificatePort = certificatePortSetting === 'off' ? null : Number(certificatePortSetting);
+if (certFile && certificatePort !== null && (!Number.isInteger(certificatePort) || certificatePort < 0 || certificatePort > 65535)) {
+  throw new Error('CERT_HTTP_PORT には0〜65535のポート番号、または off を設定してください。');
+}
+if (certFile && certificatePort !== null && certificatePort !== 0 && certificatePort === Number(PORT)) {
+  throw new Error('PORT と CERT_HTTP_PORT には異なるポート番号を設定してください。');
+}
+const server = certFile ? https.createServer({
+  cert: fs.readFileSync(path.resolve(__dirname, certFile)), key: fs.readFileSync(path.resolve(__dirname, keyFile)),
+}, handleRequest) : http.createServer(handleRequest);
+
+// Keep certificate enrollment reachable over plain HTTP before a device trusts the local CA.
+const certificateServer = certFile && certificatePort !== null ? http.createServer(async (req, res) => {
+  try {
+    const { pathname } = new URL(req.url, 'http://localhost');
+    if (pathname === CERTIFICATE_PATH) return await handleCertificateDownload(req, res);
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
+    res.end('Not found');
+  } catch {
+    if (!res.headersSent) jsonResponse(res, 500, { error: '証明書をダウンロードできませんでした。' });
+  }
+}) : null;
+
+function listen(serverInstance, port) {
+  return new Promise((resolve, reject) => {
+    serverInstance.once('error', reject);
+    serverInstance.listen(port, resolve);
+  });
+}
+
+Promise.all([listen(server, PORT), ...(certificateServer ? [listen(certificateServer, certificatePort)] : [])]).then(() => {
+  console.log(`サーバー起動: ${certFile ? 'https' : 'http'}://localhost:${server.address().port}`);
+  const downloadPort = certificateServer ? certificateServer.address().port : server.address().port;
+  if (certificateServer || !certFile) console.log(`証明書HTTP: http://localhost:${downloadPort}${CERTIFICATE_PATH}`);
+}).catch(error => {
+  console.error('サーバーを起動できませんでした:', error.message);
+  process.exit(1);
 });

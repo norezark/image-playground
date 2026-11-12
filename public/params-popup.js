@@ -20,7 +20,7 @@ export function initParamsPopup(loadPromptOnly) {
 
 function renderParamsList(entry) {
   listEl.innerHTML = '';
-  const rows = Object.entries(displayParams(entry.params))
+  const rows = [...Object.entries(displayParams(entry.params)), ...(entry.usage ? [['usage', JSON.stringify(entry.usage)]] : [])]
     .filter(([, v]) => v !== '' && v != null);
 
   for (const [key, value] of rows) {

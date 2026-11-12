@@ -70,6 +70,8 @@ function buildTileSignature(entry, imgUrl, borderColor) {
     params: entry.params ?? {},
     inputImages: entry.inputImages ?? [],
     processedInputImages: entry.processedInputImages ?? [],
+    markupImage: entry.markupImage ?? null,
+    usage: entry.usage ?? null,
     progress: entry.progress ?? null,
     favoritedImages: entry.favoritedImages ?? [],
     borderColor,
@@ -163,6 +165,10 @@ function renderImageTile(entry, imgUrl, borderColor) {
     el('div', { class: 'tile-prompt', text: entry.prompt, title: 'クリックでパラメータ一覧を表示', onclick: () => openParamsPopup(entry) }),
     ...inputImagesRow,
     ...processedImagesRow,
+    ...(entry.markupImage ? [el('div', { class: 'tile-input-images' }, [
+      el('span', { class: 'tile-input-label', text: '描き込み' }),
+      lazyImages.create(entry.markupImage, { class: 'tile-input-thumb', title: '編集APIへ渡した描き込み', onclick: () => openLightbox(entry.markupImage, [entry.markupImage]) }),
+    ])] : []),
     el('div', { class: 'tile-meta' }, [
       el('span', { class: 'tile-params', text: paramsText, title: 'クリックでパラメータ一覧を表示', onclick: () => openParamsPopup(entry) }),
       el('span', { class: 'status', text: statusLabel(entry) }),
@@ -171,7 +177,8 @@ function renderImageTile(entry, imgUrl, borderColor) {
     el('div', { class: 'tile-actions' }, [
       actionBtn,
       el('button', { class: 'load-button', text: 'Load', onclick: () => _loadParams?.(entry) }),
-      ...(imgUrl ? [el('button', { class: 'edit-button', text: 'Edit', onclick: () => _editWithImage?.(imgUrl, entry) })] : []),
+      ...(imgUrl ? [el('button', { class: 'edit-button', text: /\.(gif|svg)(?:[?#]|$)/i.test(imgUrl) ? 'Edit as PNG' : 'Edit',
+        title: 'GIF / SVGは静止画のPNGに変換して編集します', onclick: () => _editWithImage?.(imgUrl, entry) })] : []),
     ]),
   ]);
 

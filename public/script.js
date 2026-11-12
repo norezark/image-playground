@@ -1,13 +1,14 @@
 ﻿// script.js – エントリポイント・メインオーケストレーター
 
-import { inputImages, renderInputThumbnails, clearInputImages, addInputImage } from './image-input.js';
+import { inputImages, renderInputThumbnails, clearInputImages, addInputImage, blobToInputImage, getInputRevision } from './image-input.js';
 import { computeResolution, computeGeminiAspectRatio, sizeToSelects, setVisualGroup, updateSizeSelectors } from './size-selector.js';
 import { updatePriceEstimate } from './price-estimate.js';
 import { renderHistory, initHistory, setFavoritesFilter } from './history.js';
 import { createHistoryRenderScheduler } from './history-renderer.js';
 import { initParamsPopup } from './params-popup.js';
 import { postJSON } from './api.js';
-import { parseModelSelection, modelSelectionValue, PROVIDER_LABELS } from './model-selection.js';
+import { initPushNotifications } from './notifications.js';
+import { parseModelSelection, modelSelectionValue, PROVIDER_LABELS, getImageModelCapabilities, validateImageOptions } from './model-selection.js';
 // lightbox は history.js 経由で自動初期化される
 
 // ---- 共有状態 ----
@@ -78,16 +79,49 @@ function isGemini3Model(model) { return GEMINI_3_MODELS.has(model); }
 function updateModelSpecificUI() {
   const { model } = parseModelSelection(modelSelect.value);
   const isGemini = isGeminiModel(model);
-  const isImage25 = /^gpt-image-2\.5-(flare|sunburst)(-2026-09-08)?$/.test(model);
+  const caps = getImageModelCapabilities(model);
+  const editing = inputImages.length > 0;
   const quality = document.getElementById('quality');
-  for (const option of quality.querySelectorAll('[data-image-25-only]')) {
-    option.hidden = option.disabled = !isImage25;
+  for (const option of quality.querySelectorAll('[data-extended-quality]')) {
+    option.hidden = option.disabled = !caps.extendedQuality;
   }
-  if (!isImage25 && ['xhigh', 'max'].includes(quality.value)) quality.value = '';
+  if (!caps.extendedQuality && ['xhigh', 'max'].includes(quality.value)) quality.value = '';
   for (const id of IMAGE_API_PARAM_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = isGemini ? 'none' : '';
   }
+  const format = document.getElementById('format');
+  for (const option of format.querySelectorAll('[data-image-26-only]')) {
+    option.hidden = option.disabled = !caps.image26 || (option.value === 'svg' && editing);
+  }
+  if (!caps.formats.includes(format.value || 'png') || (editing && format.value === 'svg')) format.value = '';
+  const svg = caps.image26 && format.value === 'svg';
+  const gif = caps.image26 && format.value === 'gif';
+  const compression = !isGemini && ['jpeg', 'webp'].includes(format.value);
+  document.getElementById('complexityLabel').style.display = caps.complexity ? '' : 'none';
+  if (!caps.complexity) document.getElementById('complexity').value = '';
+  document.getElementById('inputFidelityLabel').style.display = !isGemini && caps.inputFidelity && editing ? '' : 'none';
+  if (!caps.inputFidelity) document.getElementById('input_fidelity').value = '';
+  document.getElementById('compressionLabel').style.display = compression ? '' : 'none';
+  if (!compression) document.getElementById('output_compression').value = '';
+  for (const option of document.getElementById('background').querySelectorAll('[data-transparency]')) {
+    option.hidden = option.disabled = !caps.transparency;
+  }
+  const background = document.getElementById('background');
+  if ((!caps.transparency && ['auto', 'transparent'].includes(background.value))
+    || (background.value === 'transparent' && !['', 'png', 'webp'].includes(format.value))) background.value = 'opaque';
+  document.getElementById('frameCountLabel').style.display = gif ? '' : 'none';
+  document.getElementById('frameDurationLabel').style.display = gif ? '' : 'none';
+  document.getElementById('svgModelLabel').style.display = svg ? '' : 'none';
+  document.getElementById('svgReasoningLabel').style.display = svg ? '' : 'none';
+  const n = document.getElementById('n');
+  n.disabled = svg;
+  n.max = svg ? '1' : '10';
+  if (svg) n.value = '1';
+  const hint = document.getElementById('formatHint');
+  hint.hidden = !svg && !gif;
+  hint.textContent = svg ? 'SVGは新規生成1枚に対応します。画像出力料金に加え、SVG作成モデルの料金がかかります。作成モデルの指定は利用権限がある場合のみ設定してください。'
+    : gif ? 'GIFは静止画を参照して生成できます。サイズはAutoを推奨します。フレーム数・サイズ・生成枚数によって生成可能な上限が変わります。' : '';
   const geminiSizeLabel = document.getElementById('geminiImageSizeLabel');
   if (geminiSizeLabel) {
     geminiSizeLabel.style.display = (isGemini && model !== 'gemini-2.5-flash-image') ? '' : 'none';
@@ -132,7 +166,14 @@ syncSlider('gemini_top_p',       'gemini_top_p_num');
 modelSelect.addEventListener('change', () => {
   localStorage.setItem('image-model-selection', modelSelect.value);
   updateModelSpecificUI();
+  renderInputThumbnails();
 });
+window.addEventListener('input-images-changed', updateModelSpecificUI);
+document.getElementById('format').addEventListener('change', () => {
+  if (document.getElementById('format').value === 'gif') setVisualGroup('sizeOrientationGroup', 'sizeOrientation', 'auto');
+  updateModelSpecificUI();
+});
+document.getElementById('background').addEventListener('change', updateModelSpecificUI);
 updateModelSpecificUI();
 
 // ---- プロンプト入力欄のオートグロー（スマホ向け） ----
@@ -183,6 +224,7 @@ function applyEntryParams(entry, { includePrompt = true } = {}) {
     autoGrowPrompt();
   }
   modelSelect.value = modelSelectionValue(entry.params);
+  document.getElementById('format').value = entry.params.format || '';
   localStorage.setItem('image-model-selection', modelSelect.value);
   document.getElementById('n').value      = entry.params.n || 1;
 
@@ -222,6 +264,9 @@ function applyEntryParams(entry, { includePrompt = true } = {}) {
   document.getElementById('format').value              = entry.params.format             || '';
   document.getElementById('output_compression').value  = entry.params.output_compression ?? '';
   document.getElementById('moderation').value          = entry.params.moderation         || '';
+  for (const [key, fallback] of [['complexity', ''], ['frame_count', 9], ['frame_duration_ms', 200], ['svg_model', ''], ['svg_reasoning', '']]) {
+    document.getElementById(key).value = entry.params[key] ?? fallback;
+  }
   synthidCheckbox.checked = entry.params.remove_synthid === true;
   updateSynthidOption();
   document.getElementById('gemini_image_size').value          = entry.params.gemini_image_size    || '1K';
@@ -238,35 +283,38 @@ function applyEntryParams(entry, { includePrompt = true } = {}) {
   updateModelSpecificUI();
 }
 
-async function loadInputImagesFromUrls(imgUrls) {
+async function loadInputImagesFromUrls(imgUrls, markupUrl) {
   clearInputImages();
-  await Promise.all(imgUrls.map(async (imgUrl) => {
-    try {
-      const res     = await fetch(imgUrl);
-      const blob    = await res.blob();
-      const dataUrl = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
-        reader.readAsDataURL(blob);
-      });
-      addInputImage({ dataUrl, mimeType: blob.type, name: imgUrl.split('/').pop() });
-    } catch (e) {
-      console.warn('入力画像の再読み込み失敗', imgUrl, e);
-    }
+  const revision = getInputRevision();
+  const images = await Promise.all(imgUrls.map(async (imgUrl) => {
+    const res = await fetch(imgUrl);
+    if (!res.ok) throw new Error('履歴の入力画像を読み込めませんでした。');
+    return blobToInputImage(await res.blob(), imgUrl.split('/').pop());
   }));
+  if (markupUrl && images.length) {
+    const res = await fetch(markupUrl);
+    if (!res.ok) throw new Error('履歴の描き込みを読み込めませんでした。');
+    images[0].markupDataUrl = (await blobToInputImage(await res.blob(), 'markup.png')).dataUrl;
+  }
+  if (revision !== getInputRevision()) return;
+  images.forEach(addInputImage);
   renderInputThumbnails();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 async function loadParams(entry) {
+  clearInputImages();
   applyEntryParams(entry, { includePrompt: true });
-  await loadInputImagesFromUrls(Array.isArray(entry.inputImages) ? entry.inputImages : []);
+  try { await loadInputImagesFromUrls(Array.isArray(entry.inputImages) ? entry.inputImages : [], entry.markupImage); }
+  catch (error) { renderInputThumbnails(); alert(error.message); }
 }
 
 // ---- 生成結果画像を入力として編集開始（prompt 以外のパラメータも Load する）----
 async function editWithImage(imgUrl, entry) {
+  clearInputImages();
   if (entry) applyEntryParams(entry, { includePrompt: false });
-  await loadInputImagesFromUrls([imgUrl]);
+  try { await loadInputImagesFromUrls([imgUrl]); }
+  catch (error) { renderInputThumbnails(); alert(error.message); }
 }
 
 // history.js に loadParams / editWithImage コールバックを登録
@@ -335,7 +383,8 @@ document.getElementById('generateForm').addEventListener('submit', async (e) => 
     return;
   }
 
-  const sizeValue = computeResolution(orientation, ratio, tier, selection);
+  const format = document.getElementById('format').value;
+  const sizeValue = computeResolution(orientation, ratio, tier, { ...selection, format });
   if (!sizeValue) { alert('選択した組み合わせで有効な解像度を計算できませんでした。'); return; }
 
   const params = {
@@ -347,13 +396,21 @@ document.getElementById('generateForm').addEventListener('submit', async (e) => 
     quality:            document.getElementById('quality').value,
     input_fidelity:     document.getElementById('input_fidelity').value,
     background:         document.getElementById('background').value,
-    format:             document.getElementById('format').value,
+    format,
     output_compression: document.getElementById('output_compression').value,
     moderation:         document.getElementById('moderation').value,
+    complexity:         document.getElementById('complexity').value,
+    ...(format === 'gif' ? { frame_count: document.getElementById('frame_count').value,
+      frame_duration_ms: document.getElementById('frame_duration_ms').value } : {}),
+    ...(format === 'svg' ? { svg_model: document.getElementById('svg_model').value.trim(),
+      svg_reasoning: document.getElementById('svg_reasoning').value } : {}),
   };
+  const markupData = getImageModelCapabilities(model).markup && inputImages[0]?.markupDataUrl;
 
   try {
-    await postJSON('/generate', { prompt, params, inputImages: inputImages.length ? inputImages : undefined });
+    validateImageOptions(params, { editing: !!inputImages.length, hasMarkup: !!markupData });
+    await postJSON('/generate', { prompt, params, inputImages: inputImages.length ? inputImages.map(({ dataUrl, mimeType, name }) => ({ dataUrl, mimeType, name })) : undefined,
+      markupImage: markupData ? { dataUrl: markupData } : undefined });
     document.getElementById('prompt').value = '';
     clearInputImages();
     renderInputThumbnails();
@@ -383,6 +440,25 @@ function setSyncClock(isoString) {
 }
 
 // ---- SSE サブスクライブ ----
+let revealedGeneration = null;
+function revealNotificationGeneration() {
+  const hash = location.hash;
+  const id = new URLSearchParams(hash.slice(1)).get('generation');
+  if (!id || id === revealedGeneration) return;
+  requestAnimationFrame(() => {
+    if (location.hash !== hash) return;
+    const tile = document.querySelector(`[id^="entry-${CSS.escape(id)}-"]`);
+    if (tile) {
+      revealedGeneration = id;
+      tile.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      tile.classList.add('notification-target');
+      setTimeout(() => tile.classList.remove('notification-target'), 5000);
+      window.history.replaceState(window.history.state, '', location.pathname + location.search);
+    }
+  });
+}
+window.addEventListener('hashchange', () => { revealedGeneration = null; revealNotificationGeneration(); });
+
 let _evtSource = null;
 let _reconnectTimer = null;
 let _heartbeatTimer = null;
@@ -418,6 +494,7 @@ function subscribe() {
       for (const entry of (msg.history || [])) entries.set(entry.id, entry);
       for (const entry of (msg.pending || [])) entries.set(entry.id, entry);
       scheduleHistoryRender();
+      revealNotificationGeneration();
       setSyncStatus('online');
     } catch (err) {
       console.error('init メッセージの解析失敗', err);
@@ -508,4 +585,5 @@ function handleUpdate(message) {
 // ---- 初期化 ----
 updateSizeSelectors(); // updatePriceEstimate() も内部で呼ばれる
 window.addEventListener('load', subscribe);
+initPushNotifications();
 

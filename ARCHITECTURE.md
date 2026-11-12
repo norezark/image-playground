@@ -12,7 +12,7 @@
 |---|---|
 | ランタイム | Node.js v22.5 以上 |
 | 外部依存 | npm パッケージ不使用。任意のSynthID前処理のみPython / CUDA / remove-ai-watermarksを使用 |
-| サーバー側モジュール | `http`, `fs`, `path`, `crypto`, `node:sqlite` |
+| サーバー側モジュール | `http`, `https`, `fs`, `path`, `crypto`, `node:sqlite` |
 | フロントエンド | バニラ JS（バンドラー不使用） |
 | DB | SQLite（`node:sqlite` 組み込み） |
 
@@ -25,6 +25,7 @@ image-playground/
 ├── server.js              # HTTP サーバー・ルーティング・SSE（~260行）
 ├── server.ps1             # バックグラウンド起動管理スクリプト
 ├── scripts/
+│   ├── setup-https.cjs    # 自己署名CA・LANのSAN証明書作成と任意の.env設定
 │   ├── setup-synthid.ps1   # 任意のPython/CUDA環境をプロジェクト内に準備
 │   ├── synthid-worker.py  # 固定バージョンの除去CLI・入出力検証
 │   └── synthid_qwen.py    # Qwenの量子化・CPU退避
@@ -32,6 +33,7 @@ image-playground/
 ├── tests/
 │   ├── image-api.test.cjs  # Images API のリクエスト回帰テスト（外部通信なし）
 │   ├── image-price.test.cjs # GPT Image 2.5 の公式料金計算例との照合
+│   ├── image26.test.cjs    # 2.6の両接続先・描き込み・新形式・料金・永続化
 │   ├── model-selection.test.cjs # 接続先を含むモデル選択・旧履歴の互換性
 │   ├── server-providers.test.cjs # HTTP/SSE/SQLite を通した接続先・キー未設定の検証
 │   ├── synthid.test.cjs    # 前処理の任意実行・API入力・失敗・キャンセル・再試行
@@ -47,12 +49,19 @@ image-playground/
 │   ├── api.js             # CometAPI / OpenAI公式 / Gemini API 呼び出し・接続先検証
 │   ├── synthid.js         # ローカル除去ワーカーの起動・直列化・状態確認
 │   ├── image-store.js     # 入力画像の共有保存・除去結果の永続キャッシュ
+│   ├── image-metadata.js  # PNG/JPEG/WebP寸法・描き込みの透過とサイズの検証
+│   ├── web-push.js        # Web Pushの暗号化・VAPID・登録永続化・送信
 │   └── generation.js      # 画像生成ループ（リトライ付き）のファクトリ
 └── public/
     ├── index.html         # SPA の唯一の HTML
     ├── style.css          # スタイルシート（ダークテーマ固定）
     ├── script.js          # エントリポイント（SSE 購読・フォーム送信・状態管理）
+    ├── notifications.js   # 端末別の通知許可・登録・解除・テスト
+    ├── sw.js              # ページを閉じた状態での通知受信・クリック処理（キャッシュなし）
+    ├── manifest.webmanifest # ホーム画面への追加（standalone）
+    ├── icons/             # PWA・通知アイコン（generate-app-icons.cjsで再生成可能）
     ├── model-selection.js # モデル選択値と接続先の変換・表示
+    ├── image-models.js    # ブラウザとサーバーで共有するモデルの機能・設定検証
     ├── utils.js           # DOM ヘルパー el()
     ├── api.js             # サーバー API 呼び出しラッパー
     ├── history.js         # 履歴タイルのレンダリング
@@ -60,9 +69,10 @@ image-playground/
     ├── history-columns.js # Grid列幅の端数によるカード内部の再レイアウトを抑制
     ├── lazy-images.js     # 画像の先読み範囲・同時読み込み数・キャンセルの管理
     ├── image-input.js     # 入力画像管理（ドロップゾーン・ファイル選択）
+    ├── markup-editor.js   # 透過Canvasによるペン・丸・取り消し・描き込み保存
     ├── size-selector.js   # サイズ計算・ビジュアルセレクタ
     ├── price-estimate.js  # 料金見積もり
-    ├── image-price.js     # GPT Image 2.5 の出力トークン・料金計算（DOM非依存）
+    ├── image-price.js     # GPT Image 2.5 / 2.6の出力トークン・料金計算（DOM非依存）
     ├── lightbox.js        # ライトボックス（ズーム・パン・タッチ）
     ├── params-popup.js    # 生成パラメータ一覧ポップアップ
     └── images/            # 生成画像保存先（自動生成）
@@ -82,9 +92,10 @@ image-playground/
 | `lib/generation.js` | `createStartGeneration` ファクトリ。共有状態（`pendingEntries` 等）を引数として受け取り、リトライ付きの `startGeneration` 関数を返す |
 | `lib/synthid.js` | Pythonワーカーの実行・GPU処理の直列化・キャッシュ利用 |
 | `lib/image-store.js` | 入力画像の共有保存・除去結果の永続化 |
+| `lib/image-metadata.js` | PNG / JPEG（EXIF回転を含む）/ WebPの寸法と、描き込みPNGの実際の透過ピクセルを検証 |
 | `server.js` | `.env` 読み込み・設定・状態管理・ルートハンドラ・HTTP サーバー |
 
-> **依存方向**: `server.js` → `lib/*.js`（`lib/` 同士の依存はなし）
+> **依存方向**: `server.js` → `lib/*.js`。`lib/api.js` とフロントエンドは `public/image-models.js` の同じ機能定義・設定検証を使用する。
 
 ### API エンドポイント
 
@@ -94,7 +105,7 @@ image-playground/
 | `GET` | `/events` | SSE ストリーム（クライアントはここで状態を受信） |
 | `GET` | `/history` | 履歴全件を JSON で返す |
 | `GET` | `/synthid/status` | エンジンの利用可否・バージョン・デバイス・精度設定と、現行処理バージョンのキャッシュ件数を返す |
-| `POST` | `/generate` | 接続先・モデル・キー設定を検証し、HTTP 202 を返して非同期処理。不正な組み合わせ・キー未設定は入力画像保存前にHTTP 400 |
+| `POST` | `/generate` | `prompt` / `params` / 任意の `inputImages` / `markupImage` を受信。モデル・モード・設定・キー・描き込みを保存前に検証し、HTTP 202で非同期処理。不正な設定はHTTP 400 |
 | `POST` | `/cancel` | 生成キャンセル（`AbortController.abort()` を呼び出す） |
 | `POST` | `/delete` | 履歴エントリをDBから削除し、全 SSE クライアントに通知。画像ファイル・共有キャッシュは保持 |
 | `GET` | `/images/*` | 生成画像ファイルの静的配信 |
@@ -178,9 +189,25 @@ ChromaとQwenは既定で主要層をNF4量子化し、CPU退避と組み合わ�
 
 ### リトライ処理
 
-- API が失敗（ネットワークエラー・非 2xx レスポンス）した場合、`MAX_RETRIES`（デフォルト 10）まで即時リトライする。
+- ネットワークエラーとAPIからの非2xxレスポンスは、HTTPステータスにかかわらず `MAX_RETRIES`（デフォルト10）まで即時リトライする。設定の検証・前処理の失敗は生成ループに入らず停止する。
 - リトライのたびに `retry` イベントを SSE でブロードキャストし、現在のリトライ回数とエラーメッセージを含める。
 - `AbortController` によるキャンセルが検出された場合はリトライせず `cancelled` で終了する。
+
+### Web Push
+
+- `lib/generation.js` はDB保存後の成功時、またはAPIの試行上限到達時に `notifyGeneration(entry, reason)` を1回呼ぶ。前処理失敗・キャンセル・途中の再試行・SSEの初期履歴配信では呼ばない。送信の例外やPromiseの失敗は生成処理から分離し、APIを再試行しない。
+- `lib/web-push.js` はNode組み込みのECDH P-256 / HKDF-SHA256 / AES-128-GCMで [RFC 8291](https://www.rfc-editor.org/rfc/rfc8291) のペイロードを暗号化し、ES256の [VAPID JWT](https://www.rfc-editor.org/rfc/rfc8292) を付けて通知サービスへPOSTする。鍵はメッセージ暗号用とVAPID用で分け、暗号用の鍵とsaltを送信ごとに生成する。TTLは1日、Urgencyはhigh、タイムアウトは10秒。PC・スマホなど有効化した全端末に送る。配信失敗による画像生成の再実行はしない。
+- `history.db` 内の `push_settings(key, value)` にVAPID秘密JWK、`push_subscriptions(endpoint, subscription, origin)` に端末登録を保存する。公開鍵は `GET /push/config` のみで公開し、秘密鍵・登録一覧は公開しない。404/410の登録は削除し、一時エラーの登録は保持する。
+- `POST /push/subscribe`、`POST /push/unsubscribe`、`POST /push/test` は同一HostのOriginを必須とし、クロスオリジンのCORSを許可しない。登録JSONは16KiBまで、鍵は形式とP-256上の点を検証。通知先はHTTPSのGoogle / Mozilla / Apple / Microsoftの通知サービスのみ許可し、リダイレクトを拒否する。
+- `public/notifications.js` はユーザー操作でのみ通知許可を求める。既存の登録は読み込み時にサーバーへ同期し、鍵の変更を検出した場合は再登録を案内する。端末単位でオン・オフできる。
+- `public/sw.js` は受信ごとに通知を表示し、クリックで同一オリジンの `/#generation=<id>` を開く。`script.js` が履歴描画後に該当タイルへ移動し、`history.state` とパス・クエリを保持した `replaceState` で通知用のハッシュを取り除く。描画待ちの間にハッシュが変わった場合は古い対象への移動を行わない。Service Workerは通常のfetchを横取りせず、画像・API・画面をキャッシュしない。
+- `HTTPS_CERT_FILE` と `HTTPS_KEY_FILE` が両方あれば `https.createServer`、なければ従来のHTTPで起動する。LAN端末では信頼されたHTTPSが必要。iOSのホーム画面アプリのためmanifestとPNGアイコンを配信する。
+- `GET /cert/rootCA.cer`（HEAD対応）は `HTTPS_CA_CERT_FILE`（既定 `certs/rootCA.pem`）からX.509を読み、公開証明書のDERだけを `application/x-x509-ca-cert` とattachment指定で配布する。PEMに秘密鍵が混在していてもファイル自体を送らない。証明書の欠落は404、不正な証明書やCA以外は503、GET/HEAD以外は405。
+- HTTPS使用時は `CERT_HTTP_PORT`（既定は `PORT + 1`、通常8001）で証明書配布専用HTTPサーバーも同じNodeプロセス内で起動する。このポートは証明書パス以外を404にし、生成APIや履歴を提供しない。`CERT_HTTP_PORT=off` で無効化。HTTP単独モードではメインポートで同じ証明書パスを提供する。
+- `scripts/setup-https.cjs` はOpenSSLで自己署名ローカルCA（CA:true / pathlen:0）とRSA-3072 / SHA-256のサーバー証明書（CA:false / serverAuth / DNS・IPのSAN）を作成する。既存CAを再利用し、SANの変更・期限接近時にサーバー証明書だけを再発行する。`--configure` で.envの証明書・秘密鍵・配布用CAのパスを更新し、APIキー等は保持する。信頼ストアと稼働中サーバーには触れない。任意のPEMへの差し替えは引き続き環境変数で指定できる。
+- `tests/https.test.cjs` は自己署名CAの再利用、SAN変更時の再発行、.envの既存値の保持と任意パスのPEMでのHTTPS起動を検証する。TLS接続はCA・ホスト名検証を有効にし、未信頼のCAや不一致のホスト名が拒否されることも確認する。証明書作成テストのみOpenSSLがない環境ではスキップする。
+- 同テストでHTTP・HTTPSでの公開CAダウンロード、配布専用ポートの分離、秘密鍵を含むPEMからのDER抽出、GET/HEADのヘッダーと不正なファイルの拒否も確認する。
+- `tests/web-push.test.cjs` はRFCの既知暗号文・JWT署名・鍵と登録の永続化を検証する。`tests/push-notifications.test.cjs` はブラウザ接続なしのHTTP生成→端末ごとの暗号文復号、上限・回復・登録解除・送信障害の分離を検証する。通知サービスと生成APIへの実通信は行わない。
 
 ---
 
@@ -201,6 +228,8 @@ ChromaとQwenは既定で主要層をNF4量子化し、CPU退避と組み合わ�
 | `images` | TEXT | 生成画像 URL の JSON 配列 |
 | `input_images` | TEXT | 元の入力画像 URL の JSON 配列（レスポンスでは `inputImages`） |
 | `processed_input_images` | TEXT | 任意の前処理後の入力画像 URL の JSON 配列（レスポンスでは `processedInputImages`） |
+| `markup_image` | TEXT | 先頭画像への描き込みPNGのURL（レスポンスでは `markupImage`） |
+| `usage` | TEXT | 画像モデルの `usage` とSVG作成モデルの `svg_usage` を `image` / `svg` に分けたJSON |
 | `error` | TEXT | エラーメッセージ（失敗時のみ） |
 | `timestamp` | TEXT | ISO 8601 形式の生成日時 |
 | `retries` | INTEGER | APIの再試行回数（前処理失敗は0） |
@@ -219,7 +248,7 @@ ChromaとQwenは既定で主要層をNF4量子化し、CPU退避と組み合わ�
 ### マイグレーション
 
 旧形式の `history.json` が存在する場合、初回起動時に自動で SQLite へ移行し、元ファイルを `history.json.bak` にリネームする。
-`processed_input_images` がないDBには起動時にカラムを追加する。
+`processed_input_images` / `markup_image` / `usage` がないDBには起動時にカラムを追加する。旧履歴のパラメータや画像は書き換えない。
 
 ---
 
@@ -280,10 +309,21 @@ el('div', { className: 'tile' }, [
 - ピンチ、ドラッグ、キャンセルしたタッチはダブルタップとして扱わず、操作後のクリックで誤って閉じることも防ぐ。
 - 切り替え先の画像ごとに表示倍率・位置をリセットして画面内に収める。画像切り替えではブラウザ履歴を追加せず、戻る操作1回で閉じる。
 
+### GPT Image 2.6
+
+- `gpt-image-2.6-flare` / `gpt-image-2.6-sunburst` をCometAPIとOpenAI公式の両方に登録。2.6の機能制御は接続先によって分けず、モデル・生成／編集モード・出力形式で決める。接続先はURL・認証・料金に使用する。
+- `public/image-models.js` は副作用importとCommonJS requireの双方で使える共有モジュール。Complexity、拡張品質、透過背景、描き込み、新形式と不正な組み合わせの検証をまとめる。
+- 2.6では生成・編集とも `output_format` / `complexity` を使用し、`input_fidelity` を送らない。GIFは `frame_count` / `frame_duration_ms`、SVGは必要な場合のみ `svg: { model, reasoning: { effort } }` を送る。
+- 描き込みは `/generate` の `markupImage: { dataUrl }` で受信する。保存前に透過PNG・50MB以下・先頭画像との寸法一致・最大16,777,216画素を検証する。編集APIには元画像と分離したmultipartの `markup` として送る。入力画像の読み込み・履歴復元では選択順を維持する。
+- GIF / SVGの拡張子とMIMEを保存・配信まで維持し、SVGはimg要素で表示する。SVGファイルの配信には外部リソース・スクリプトを制限するCSPを付与する。Edit as PNGではGIF / SVGをCanvasで静止画PNGに変換する。
+- SVGは生成のみ・`n=1`。GIF / SVGには圧縮率を送らず、GIF固有設定を他形式へ送らない。GIFの小さいフレーム用に256px / 512pxを追加する。GIFの総画素数の上限はAPI側でも検証される。
+- 2.6の出力トークンは2.5の計算結果を切り上げた後、Lowは4.2倍、Mediumは3.3倍して整数に丸める。High / XHigh / Maxは2.5と同じ。公式計算器 `GptImageTokenCalculator.react.D6e1YylC.js`（2026-11-06）と照合。SVGは参考画像分の見積もりと作成モデルの別料金を案内し、GIFの事前見積もりは未対応と明示する。
+- APIから返る `usage` / `svg_usage` は履歴に保存し、パラメータ一覧で表示する。APIの失敗はHTTPステータスにかかわらず既存の設定回数まで再試行する。
+
 ### GPT Image 2.5
 
 - `index.html` に `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` をCometAPIとOpenAI公式のグループに登録。各接続先の Images エンドポイントと専用APIキーで生成・編集する。
-- `script.js` は `xhigh` / `max` を 2.5 選択時のみ有効化し、他モデルへの切り替え時は非対応の品質値を Default に戻す。履歴の Load でも同じ制御を適用する。
+- `script.js` は `xhigh` / `max` を 2.5 / 2.6選択時に有効化し、他モデルへの切り替え時は非対応の品質値を Default に戻す。履歴の Load でも同じ制御を適用する。
 - `lib/api.js` は 2.5 の生成リクエストに `output_format` を使用し、編集用の `input_fidelity` は生成時に送らない。編集時は従来通り multipart の `output_format` / `input_fidelity` を使用する。
 - `image-price.js` は公式計算器と同じ式を使用する。品質ごとの長辺グリッドは `low=16, medium=24, high=48, xhigh=64, max=96`。短辺グリッドは長辺グリッド÷アスペクト比を偶数丸めし、出力トークン数は `ceil(長辺グリッド × 短辺グリッド × (2,000,000 + 幅×高さ) / 4,000,000)`。CometAPI標準料金は公式 `$30/1M` × `0.8` の `$24/1M`（2026-09-09確認）。
 - `price-estimate.js` は2.5の出力料金を小数点以下5桁で表示する。枚数分の合計は丸め前の値で計算。品質 Default / Auto は Low〜Max の範囲、サイズ Auto は1024×1024の参考値と明記する。入力料金・リトライは含めない。

@@ -22,7 +22,7 @@ export function computeGeminiAspectRatio(orientation, ratio) {
   return entry[orientation === 'portrait' ? 'portrait' : 'landscape'] || null;
 }
 
-export const SIZE_TIERS = { S: 1024, M: 1536, L: 2048, XL: 2880 };
+export const SIZE_TIERS = { GIF256: 256, GIF512: 512, S: 1024, M: 1536, L: 2048, XL: 2880 };
 const ASPECT_RATIOS_MAP = {
   '5:4':  [5, 4],
   '4:3':  [4, 3],
@@ -34,6 +34,7 @@ const ASPECT_RATIOS_MAP = {
 };
 
 export function computeResolution(orientation, ratio, tier, selection) {
+  const gif = selection?.format === 'gif';
   if (orientation === 'auto') return 'auto';
   if (usesStandardImageSizes(selection)) {
     return orientation === 'square' ? '1024x1024' : orientation === 'portrait' ? '1024x1536' : '1536x1024';
@@ -48,7 +49,7 @@ export function computeResolution(orientation, ratio, tier, selection) {
   const calcShort = (l) => Math.round(l * sp / lp / 16) * 16;
   let longEdge  = Math.round(baseLong / 16) * 16;
   let shortEdge = calcShort(longEdge);
-  while (longEdge * shortEdge < 655360) {
+  while (!gif && longEdge * shortEdge < 655360) {
     longEdge += 16;
     shortEdge = calcShort(longEdge);
     if (longEdge > 3840 || shortEdge > 3840) return null;
@@ -58,7 +59,7 @@ export function computeResolution(orientation, ratio, tier, selection) {
     if (longEdge < 16) return null;
     shortEdge = calcShort(longEdge);
   }
-  if (longEdge < shortEdge || longEdge / shortEdge > 3.001 || longEdge * shortEdge < 655360) return null;
+  if (longEdge < shortEdge || longEdge / shortEdge > 3.001 || (!gif && longEdge * shortEdge < 655360)) return null;
   return orientation === 'landscape' ? `${longEdge}x${shortEdge}` : `${shortEdge}x${longEdge}`;
 }
 
@@ -94,9 +95,12 @@ export function setVisualGroup(groupId, inputId, value) {
 }
 
 export function updateSizeSelectors() {
-  const selection = parseModelSelection(document.getElementById('model').value);
+  const selection = { ...parseModelSelection(document.getElementById('model').value), format: document.getElementById('format').value };
   const { model } = selection;
   const standardSizes = usesStandardImageSizes(selection);
+  const tier = document.getElementById('sizeTier');
+  for (const option of tier.querySelectorAll('[data-gif-only]')) option.hidden = option.disabled = selection.format !== 'gif';
+  if (selection.format !== 'gif' && tier.value.startsWith('GIF')) tier.value = 'S';
   const isGemini  = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'].includes(model);
   const orientation = document.getElementById('sizeOrientation').value;
   const isAuto      = orientation === 'auto';
